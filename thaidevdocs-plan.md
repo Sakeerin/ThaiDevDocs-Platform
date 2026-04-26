@@ -632,11 +632,11 @@ export function Comments({ slug }: { slug: string }) {
 - [ ] deploy ไป Vercel (staging domain) — รอ `vercel login` บนเครื่องผู้ใช้
 
 **วันที่ 3–4: Navigation + Layout**
-- [ ] sidebar navigation: Laravel / Vue / DevOps / AI / Thai Context
-- [ ] breadcrumb navigation
-- [ ] Table of Contents (right sidebar) — เฉพาะ desktop
-- [ ] mobile hamburger menu
-- [ ] footer: GitHub link, contribute link, social
+- [x] sidebar navigation: Laravel / Vue / DevOps / AI / Thai Context
+- [x] breadcrumb navigation
+- [x] Table of Contents (right sidebar) — เฉพาะ desktop
+- [x] mobile hamburger menu
+- [x] footer: GitHub link, contribute link, social
 
 **วันที่ 5: Algolia DocSearch**
 - [ ] ยื่นขอ Algolia DocSearch: docsearch.algolia.com
