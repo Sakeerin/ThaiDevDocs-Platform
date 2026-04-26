@@ -640,8 +640,8 @@ export function Comments({ slug }: { slug: string }) {
 
 **วันที่ 5: Algolia DocSearch**
 - [ ] ยื่นขอ Algolia DocSearch: docsearch.algolia.com
-- [ ] config `docusearch.config.json` ให้ crawl content
-- [ ] ติดตั้ง `@docsearch/react` ใน Fumadocs
+- [x] config `docusearch.config.json` ให้ crawl content
+- [x] ติดตั้ง `@docsearch/react` ใน Fumadocs
 - [ ] ทดสอบ search บน staging
 
 **Deliverable สัปดาห์ 1:** Platform โครงสร้างพร้อม deploy staging แล้ว

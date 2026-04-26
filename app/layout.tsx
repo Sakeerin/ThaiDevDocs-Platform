@@ -2,7 +2,13 @@ import { RootProvider } from 'fumadocs-ui/provider/next';
 import { Geist, Inter } from 'next/font/google';
 import { cn } from '@/lib/utils';
 import { SiteFooter } from '@/components/site-footer';
+import { AlgoliaSearchDialog } from '@/components/algolia-search';
 import './global.css';
+
+const hasAlgolia = !!(
+  process.env.NEXT_PUBLIC_ALGOLIA_APP_ID &&
+  process.env.NEXT_PUBLIC_ALGOLIA_SEARCH_KEY
+);
 
 const geist = Geist({
   subsets: ['latin'],
@@ -21,7 +27,10 @@ export default function Layout({ children }: LayoutProps<'/'>) {
       suppressHydrationWarning
     >
       <body className="flex flex-col min-h-screen">
-        <RootProvider theme={{ defaultTheme: 'system', enableSystem: true }}>
+        <RootProvider
+          theme={{ defaultTheme: 'system', enableSystem: true }}
+          search={hasAlgolia ? { SearchDialog: AlgoliaSearchDialog } : undefined}
+        >
           <div className="flex min-h-screen flex-col">
             <div className="flex-1">{children}</div>
             <SiteFooter />

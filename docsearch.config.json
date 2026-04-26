@@ -1,0 +1,52 @@
+{
+  "index_name": "thaidevdocs",
+  "start_urls": ["https://thaidevdocs.com/"],
+  "sitemap_urls": ["https://thaidevdocs.com/sitemap.xml"],
+  "stop_urls": ["/api/"],
+  "selectors": {
+    "lvl0": {
+      "selector": "nav[aria-label='breadcrumb'] ol li:nth-child(2)",
+      "global": true,
+      "default_value": "Documentation"
+    },
+    "lvl1": "article h1",
+    "lvl2": "article h2",
+    "lvl3": "article h3",
+    "lvl4": "article h4",
+    "text": "article p, article li, article td:last-child"
+  },
+  "custom_settings": {
+    "separatorsToIndex": "_",
+    "attributesForFaceting": ["type", "lang"],
+    "attributesToRetrieve": [
+      "hierarchy",
+      "content",
+      "anchor",
+      "url",
+      "url_without_anchor",
+      "type"
+    ],
+    "attributesToHighlight": ["hierarchy", "content"],
+    "attributesToSnippet": ["content:10"],
+    "searchableAttributes": [
+      "unordered(hierarchy.lvl0)",
+      "unordered(hierarchy.lvl1)",
+      "unordered(hierarchy.lvl2)",
+      "unordered(hierarchy.lvl3)",
+      "unordered(hierarchy.lvl4)",
+      "content"
+    ],
+    "distinct": true,
+    "attributeForDistinct": "url",
+    "customRanking": [
+      "desc(weight.pageRank)",
+      "desc(weight.level)",
+      "asc(weight.position)"
+    ],
+    "ignorePlurals": true,
+    "minWordSizefor1Typo": 3,
+    "minWordSizefor2Typos": 7,
+    "removeWordsIfNoResults": "allOptional",
+    "queryLanguages": ["th", "en"]
+  }
+}
