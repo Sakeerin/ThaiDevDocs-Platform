@@ -111,3 +111,67 @@ export async function sendWeeklyNewsletter(articles: Array<{ title: string; url:
 
   return { sent };
 }
+
+export async function sendLaunchAnnouncement() {
+  if (!isResendConfigured()) {
+    return { sent: 0, reason: 'not_configured' as const };
+  }
+
+  const subscribers = await readSubscribers();
+  if (subscribers.length === 0) {
+    return { sent: 0, reason: 'no_subscribers' as const };
+  }
+
+  const resend = getResendClient();
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://thaidevdocs.com';
+  let sent = 0;
+
+  for (const subscriber of subscribers) {
+    await resend.emails.send({
+      from: process.env.RESEND_FROM_EMAIL!,
+      to: subscriber.email,
+      subject: 'ThaiDevDocs v1.0 — เปิดให้ใช้งานแล้ว',
+      html: `
+        <h1>ThaiDevDocs v1.0 เปิดแล้ว</h1>
+        <p>ขอบคุณที่สมัครรับข่าวสารไว้ — ตอนนี้ docs พร้อมใช้งานแล้ว</p>
+        <ul>
+          <li>57+ articles: Laravel, Vue, DevOps, AI, Thai Context</li>
+          <li>AI Q&A ภาษาไทย (Pro)</li>
+          <li>Contribute ผ่าน GitHub Pull Request</li>
+        </ul>
+        <p><a href="${siteUrl}/docs">เริ่มอ่าน docs</a> · <a href="${siteUrl}/pricing">ดู Pro plan</a></p>
+      `,
+    });
+    sent += 1;
+  }
+
+  return { sent };
+}
+
+export async function sendBetaInvite(email: string) {
+  if (!isResendConfigured()) {
+    return { sent: false, reason: 'not_configured' as const };
+  }
+
+  const resend = getResendClient();
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://thaidevdocs.com';
+
+  await resend.emails.send({
+    from: process.env.RESEND_FROM_EMAIL!,
+    to: email,
+    subject: 'เชิญทดสอบ ThaiDevDocs ก่อน launch',
+    html: `
+      <h1>เชิญทดสอบ ThaiDevDocs beta</h1>
+      <p>เรากำลังเตรียม launch docs ภาษาไทยสำหรับ Laravel/Vue/DevOps และอยากได้ feedback จากคุณก่อนประกาศสาธารณะ</p>
+      <p>ช่วยลอง:</p>
+      <ul>
+        <li>อ่าน docs และแจ้งจุดที่อ่านยาก/ผิด</li>
+        <li>ทด AI Q&A (ถ้ามี Pro access)</li>
+        <li>Comment ผ่าน Giscus</li>
+      </ul>
+      <p><a href="${siteUrl}/docs">เปิด ThaiDevDocs</a></p>
+    `,
+  });
+
+  return { sent: true as const };
+}

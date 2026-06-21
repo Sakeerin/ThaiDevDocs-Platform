@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { AvatarImage } from '@/components/avatar-image';
 import { getSession } from '@/lib/auth';
 import { userContributedToArticle } from '@/lib/article-utils';
 import { source } from '@/lib/source';
@@ -24,12 +25,7 @@ export default async function ProfilePage() {
           Signed in as <span className="font-medium text-foreground">{username}</span>
         </p>
         {session.user.image ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={session.user.image}
-            alt=""
-            className="size-16 rounded-full border"
-          />
+          <AvatarImage src={session.user.image} alt={username} />
         ) : null}
       </header>
 

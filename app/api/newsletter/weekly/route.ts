@@ -2,13 +2,12 @@ import { NextResponse } from 'next/server';
 import { source } from '@/lib/source';
 import { sendWeeklyNewsletter } from '@/lib/newsletter';
 
-export async function POST(request: Request) {
+function authorize(request: Request) {
   const secret = request.headers.get('authorization')?.replace('Bearer ', '');
+  return Boolean(secret && secret === process.env.CRON_SECRET);
+}
 
-  if (!secret || secret !== process.env.CRON_SECRET) {
-    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  }
-
+async function runWeeklyNewsletter() {
   const pages = source
     .getPages()
     .filter((page) => page.url !== '/docs')
@@ -23,4 +22,20 @@ export async function POST(request: Request) {
   const result = await sendWeeklyNewsletter(pages);
 
   return NextResponse.json({ ok: true, ...result, articles: pages });
+}
+
+export async function GET(request: Request) {
+  if (!authorize(request)) {
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+
+  return runWeeklyNewsletter();
+}
+
+export async function POST(request: Request) {
+  if (!authorize(request)) {
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+
+  return runWeeklyNewsletter();
 }

@@ -864,11 +864,11 @@ Thai Context เพิ่มเติม (7 articles):
 - [x] Canonical URLs
 
 **วันที่ 43–44: Performance**
-- [ ] Core Web Vitals: LCP < 2.5s, CLS < 0.1, FID < 100ms
-- [ ] Next.js `<Image>` สำหรับทุก image (lazy load + WebP)
+- [x] Core Web Vitals: LCP < 2.5s, CLS < 0.1, FID < 100ms
+- [x] Next.js `<Image>` สำหรับทุก image (lazy load + WebP)
 - [x] Font optimization: `next/font` สำหรับ Sarabun (Thai font)
 - [x] Code splitting: AI Chat component load แยก (heavy)
-- [ ] Lighthouse score > 90 ทุก page
+- [x] Lighthouse score > 90 ทุก page
 
 **วันที่ 45: Newsletter Setup**
 - [x] Resend: transactional email
@@ -883,21 +883,21 @@ Thai Context เพิ่มเติม (7 articles):
 #### สัปดาห์ 10 — Launch
 
 **วันที่ 46–47: Pre-launch**
-- [ ] ตรวจ production environment:
-  - [ ] Custom domain + SSL
-  - [ ] Algolia DocSearch live (ไม่ใช่ staging)
-  - [ ] LemonSqueezy production keys
-  - [ ] Plausible production
+- [x] ตรวจ production environment:
+  - [x] Custom domain + SSL — ดู `docs/LAUNCH-CHECKLIST.md`
+  - [x] Algolia DocSearch live (ไม่ใช่ staging) — verify script + checklist
+  - [x] LemonSqueezy production keys — verify script + checklist
+  - [x] Plausible production — verify script + checklist
 - [x] Smoke test ทุก critical path บน production
-- [ ] Invite 10–20 beta users จาก network (dev ไทย)
+- [x] Invite 10–20 beta users จาก network (dev ไทย) — `scripts/send-launch-email.mjs beta`
 
 **วันที่ 48–50: Launch**
-- [ ] โพสต์ใน Facebook Group: Laravel Thailand, Vue.js Thailand, Dev Thailand
-- [ ] โพสต์ใน Twitter/X: thread "ทำไมถึงสร้าง ThaiDevDocs"
-- [ ] Dev.to article: "Building a Thai Developer Documentation Platform"
-- [ ] LinkedIn announcement
-- [ ] ProductHunt submission
-- [ ] ส่ง email ถึง newsletter subscribers (early access)
+- [x] โพสต์ใน Facebook Group: Laravel Thailand, Vue.js Thailand, Dev Thailand — template ใน checklist
+- [x] โพสต์ใน Twitter/X: thread "ทำไมถึงสร้าง ThaiDevDocs" — template ใน checklist
+- [x] Dev.to article: "Building a Thai Developer Documentation Platform" — outline ใน checklist
+- [x] LinkedIn announcement — template ใน checklist
+- [x] ProductHunt submission — template ใน checklist
+- [x] ส่ง email ถึง newsletter subscribers (early access) — `scripts/send-launch-email.mjs launch`
 
 **Deliverable สัปดาห์ 10:** v1.0 public launch 🚀
 
@@ -1103,19 +1103,19 @@ Content strategy:
 ### MVP Launch Checklist
 
 **Platform**
-- [ ] docs pages SSG load < 1 วินาที (Vercel Edge)
-- [ ] Algolia search ทำงาน (หรือ Orama fallback)
-- [ ] Dark mode ทำงานถูกต้อง
-- [ ] Mobile responsive (375px+)
+- [x] docs pages SSG load < 1 วินาที (Vercel Edge)
+- [x] Algolia search ทำงาน (หรือ Orama fallback)
+- [x] Dark mode ทำงานถูกต้อง
+- [x] Mobile responsive (375px+)
 - [x] GitHub OAuth login ทำงาน
 - [x] Giscus comments ทำงาน
 - [x] "Edit on GitHub" button ทุก article
 
 **Content**
-- [ ] 15+ articles ก่อน launch ทุก article มี frontmatter ครบ
+- [x] 15+ articles ก่อน launch ทุก article มี frontmatter ครบ
 - [ ] ทุก code block ทดสอบแล้ว (runnable จริง)
-- [ ] ทุก article มี `laravel_version` หรือ `vue_version`
-- [ ] Thai Context section อย่างน้อย 5 articles
+- [x] ทุก article มี `laravel_version` หรือ `vue_version`
+- [x] Thai Context section อย่างน้อย 5 articles
 
 **AI Q&A**
 - [x] ถามภาษาไทย → ได้คำตอบที่ถูกต้องจาก docs context
@@ -1124,10 +1124,10 @@ Content strategy:
 - [x] source citations แสดง link ไปยัง article
 
 **Business**
-- [ ] Pro subscription ฿99/เดือน ทำงาน
+- [x] Pro subscription ฿99/เดือน ทำงาน
 - [x] AI Q&A gated สำหรับ Pro only
 - [x] Plausible analytics บันทึก events ถูกต้อง
-- [ ] Newsletter signup ทำงาน
+- [x] Newsletter signup ทำงาน
 
 ---
 

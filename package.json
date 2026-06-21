@@ -12,6 +12,8 @@
     "content:validate": "node scripts/validate-frontmatter.mjs",
     "content:stale": "node scripts/check-stale-content.mjs",
     "smoke:test": "node scripts/smoke-test.mjs",
+    "verify:production": "node scripts/verify-production-env.mjs",
+    "lighthouse:audit": "node scripts/lighthouse-audit.mjs",
     "newsletter:weekly": "node scripts/send-weekly-newsletter.mjs",
     "vercel:pull": "npx vercel pull --yes --environment=preview",
     "deploy:staging": "npx vercel deploy --yes"

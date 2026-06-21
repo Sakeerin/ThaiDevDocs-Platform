@@ -25,6 +25,7 @@ yarn-error.log*
 .vercel
 next-env.d.ts
 /.data
+/.lighthouse
 
 # Laravel API
 /apps/api/vendor

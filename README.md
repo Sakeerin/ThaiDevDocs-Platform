@@ -73,6 +73,9 @@ Copy `.env.local.example` to `.env.local` and configure:
 - Newsletter signup (Resend) on home page + article footer
 - Weekly newsletter cron: `POST /api/newsletter/weekly` with `Authorization: Bearer $CRON_SECRET`
 - Smoke test: `npm run smoke:test` (set `SMOKE_TEST_URL` for production)
+- Production verify: `npm run verify:production`
+- Lighthouse audit: `npm run lighthouse:audit` (target score ≥ 90)
+- Launch checklist: [docs/LAUNCH-CHECKLIST.md](docs/LAUNCH-CHECKLIST.md)
 
 Copy additional env vars from `.env.local.example`:
 

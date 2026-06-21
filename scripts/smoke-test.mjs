@@ -12,6 +12,7 @@ const routes = [
   '/sitemap.xml',
   '/robots.txt',
   '/og/default',
+  '/llms.txt',
 ];
 
 async function checkRoute(path) {

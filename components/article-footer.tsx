@@ -1,4 +1,4 @@
-import { Comments } from '@/components/comments';
+import { CommentsLazy } from '@/components/comments-lazy';
 import { HelpfulVote } from '@/components/helpful-vote';
 import { NewsletterSignup } from '@/components/newsletter-signup';
 
@@ -13,7 +13,7 @@ export function ArticleFooter({ slug, pageUrl, pageTitle }: ArticleFooterProps) 
     <div className="mt-10 space-y-8 border-t pt-8">
       <HelpfulVote pageUrl={pageUrl} pageTitle={pageTitle} />
       <NewsletterSignup compact />
-      <Comments slug={slug} />
+      <CommentsLazy slug={slug} />
     </div>
   );
 }

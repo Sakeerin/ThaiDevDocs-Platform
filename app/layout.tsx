@@ -1,5 +1,5 @@
 import { RootProvider } from 'fumadocs-ui/provider/next';
-import { Geist, Inter, Sarabun } from 'next/font/google';
+import { Sarabun } from 'next/font/google';
 import type { Metadata } from 'next';
 import { cn } from '@/lib/utils';
 import { SiteFooter } from '@/components/site-footer';
@@ -16,20 +16,12 @@ const hasAlgolia = !!(
   process.env.NEXT_PUBLIC_ALGOLIA_SEARCH_KEY
 );
 
-const geist = Geist({
-  subsets: ['latin'],
-  variable: '--font-sans',
-});
-
-const inter = Inter({
-  subsets: ['latin'],
-});
-
 const sarabun = Sarabun({
   subsets: ['thai', 'latin'],
   weight: ['400', '500', '600', '700'],
-  variable: '--font-thai',
+  variable: '--font-sans',
   display: 'swap',
+  preload: true,
 });
 
 export const metadata: Metadata = createPageMetadata({
@@ -43,12 +35,12 @@ export default async function Layout({ children }: LayoutProps<'/'>) {
   const session = await getSession();
 
   return (
-    <html
-      lang="th"
-      className={cn(inter.className, 'font-sans', geist.variable, sarabun.variable)}
-      suppressHydrationWarning
-    >
-      <body className="flex min-h-screen flex-col font-[family-name:var(--font-thai)]">
+    <html lang="th" className={cn(sarabun.className, sarabun.variable)} suppressHydrationWarning>
+      <head>
+        <link rel="preconnect" href="https://plausible.io" />
+        {hasAlgolia ? <link rel="preconnect" href="https://cdn.jsdelivr.net" /> : null}
+      </head>
+      <body className="flex min-h-screen flex-col">
         <AuthSessionProvider session={session}>
           <RootProvider
             theme={{ defaultTheme: 'system', enableSystem: true }}
