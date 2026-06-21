@@ -857,24 +857,24 @@ Thai Context เพิ่มเติม (7 articles):
 #### สัปดาห์ 9 — SEO + Performance
 
 **วันที่ 41–42: SEO Optimization**
-- [ ] `generateMetadata()` ทุก page: title, description, OG, Twitter card
-- [ ] Structured data (JSON-LD): Article, BreadcrumbList
-- [ ] `/sitemap.xml` — ทุก article page
-- [ ] `/robots.txt` — allow Googlebot
-- [ ] Canonical URLs
+- [x] `generateMetadata()` ทุก page: title, description, OG, Twitter card
+- [x] Structured data (JSON-LD): Article, BreadcrumbList
+- [x] `/sitemap.xml` — ทุก article page
+- [x] `/robots.txt` — allow Googlebot
+- [x] Canonical URLs
 
 **วันที่ 43–44: Performance**
 - [ ] Core Web Vitals: LCP < 2.5s, CLS < 0.1, FID < 100ms
 - [ ] Next.js `<Image>` สำหรับทุก image (lazy load + WebP)
-- [ ] Font optimization: `next/font` สำหรับ Sarabun (Thai font)
-- [ ] Code splitting: AI Chat component load แยก (heavy)
+- [x] Font optimization: `next/font` สำหรับ Sarabun (Thai font)
+- [x] Code splitting: AI Chat component load แยก (heavy)
 - [ ] Lighthouse score > 90 ทุก page
 
 **วันที่ 45: Newsletter Setup**
-- [ ] Resend: transactional email
-- [ ] Newsletter signup form บน landing page + article footer
-- [ ] Welcome email: "ขอบคุณที่สมัคร — articles ใหม่ทุกสัปดาห์"
-- [ ] Weekly newsletter: top 3 articles ของสัปดาห์
+- [x] Resend: transactional email
+- [x] Newsletter signup form บน landing page + article footer
+- [x] Welcome email: "ขอบคุณที่สมัคร — articles ใหม่ทุกสัปดาห์"
+- [x] Weekly newsletter: top 3 articles ของสัปดาห์
 
 **Deliverable สัปดาห์ 9:** SEO ready, performance ผ่าน, newsletter พร้อม
 
@@ -888,7 +888,7 @@ Thai Context เพิ่มเติม (7 articles):
   - [ ] Algolia DocSearch live (ไม่ใช่ staging)
   - [ ] LemonSqueezy production keys
   - [ ] Plausible production
-- [ ] Smoke test ทุก critical path บน production
+- [x] Smoke test ทุก critical path บน production
 - [ ] Invite 10–20 beta users จาก network (dev ไทย)
 
 **วันที่ 48–50: Launch**

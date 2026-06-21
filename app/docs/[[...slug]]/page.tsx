@@ -19,10 +19,12 @@ import { EditOnGitHubButton } from '@/components/edit-on-github-button';
 import { ArticleFooter } from '@/components/article-footer';
 import { ArticleViewTracker } from '@/components/article-view-tracker';
 import { ReadingProgress } from '@/components/reading-progress';
-import { AiChat } from '@/components/ai-chat';
+import { AiChatLazy } from '@/components/ai-chat-lazy';
+import { ArticleJsonLd } from '@/components/article-json-ld';
 import { PremiumGate } from '@/components/premium-gate';
 import { getSession } from '@/lib/auth';
 import { getSubscriptionStatus } from '@/lib/subscription';
+import { createArticleMetadata, getSiteUrl } from '@/lib/seo';
 
 export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
   const params = await props.params;
@@ -39,6 +41,7 @@ export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
 
   return (
     <>
+      <ArticleJsonLd data={page.data} path={pageUrl} slug={page.slugs} />
       <ReadingProgress />
       <ArticleViewTracker
         pageUrl={pageUrl}
@@ -85,7 +88,7 @@ export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
         </DocsBody>
         <ArticleFooter slug={pageUrl} pageUrl={pageUrl} pageTitle={page.data.title} />
       </DocsPage>
-      <AiChat
+      <AiChatLazy
         articleSlug={pageUrl}
         isPro={subscription.isPro}
         isLoggedIn={Boolean(session?.user)}
@@ -103,11 +106,13 @@ export async function generateMetadata(props: PageProps<'/docs/[[...slug]]'>): P
   const page = source.getPage(params.slug);
   if (!page) notFound();
 
-  return {
+  const ogImage = getSiteUrl(getPageImage(page).url);
+
+  return createArticleMetadata({
     title: page.data.title,
-    description: page.data.description,
-    openGraph: {
-      images: getPageImage(page).url,
-    },
-  };
+    description: page.data.description ?? page.data.title,
+    path: page.url,
+    ogImage,
+    tags: page.data.tags,
+  });
 }

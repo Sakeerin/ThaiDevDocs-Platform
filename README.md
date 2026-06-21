@@ -63,6 +63,22 @@ Copy `.env.local.example` to `.env.local` and configure:
 - `NEXT_PUBLIC_PLAUSIBLE_DOMAIN` for analytics
 - `NEXT_PUBLIC_LEMON_SQUEEZY_CHECKOUT_*` for Pro checkout links
 
+## SEO + Launch (Phase 4)
+
+- Per-page metadata (title, description, OG, Twitter card, canonical URLs)
+- JSON-LD structured data (Article + BreadcrumbList) on docs pages
+- `/sitemap.xml` and `/robots.txt`
+- Sarabun Thai font via `next/font`
+- AI Chat lazy-loaded for better Core Web Vitals
+- Newsletter signup (Resend) on home page + article footer
+- Weekly newsletter cron: `POST /api/newsletter/weekly` with `Authorization: Bearer $CRON_SECRET`
+- Smoke test: `npm run smoke:test` (set `SMOKE_TEST_URL` for production)
+
+Copy additional env vars from `.env.local.example`:
+
+- `NEXT_PUBLIC_SITE_URL` for canonical URLs and sitemap
+- `RESEND_API_KEY`, `RESEND_FROM_EMAIL` for newsletter emails
+- `CRON_SECRET` for weekly newsletter endpoint
 
 ## Vercel Staging Setup
 

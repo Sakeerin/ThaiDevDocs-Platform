@@ -1,5 +1,6 @@
 import { Comments } from '@/components/comments';
 import { HelpfulVote } from '@/components/helpful-vote';
+import { NewsletterSignup } from '@/components/newsletter-signup';
 
 type ArticleFooterProps = {
   slug: string;
@@ -11,6 +12,7 @@ export function ArticleFooter({ slug, pageUrl, pageTitle }: ArticleFooterProps) 
   return (
     <div className="mt-10 space-y-8 border-t pt-8">
       <HelpfulVote pageUrl={pageUrl} pageTitle={pageTitle} />
+      <NewsletterSignup compact />
       <Comments slug={slug} />
     </div>
   );
