@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getToken } from 'next-auth/jwt';
 import { isMarkdownPreferred, rewritePath } from 'fumadocs-core/negotiation';
 import { docsContentRoute, docsRoute } from '@/lib/shared';
 
@@ -11,19 +12,36 @@ const { rewrite: rewriteSuffix } = rewritePath(
   `${docsContentRoute}{/*path}/content.md`,
 );
 
-export default function proxy(request: NextRequest) {
-  const result = rewriteSuffix(request.nextUrl.pathname);
-  if (result) {
-    return NextResponse.rewrite(new URL(result, request.nextUrl));
+export default async function proxy(request: NextRequest) {
+  if (request.nextUrl.pathname.startsWith('/profile')) {
+    const token = await getToken({
+      req: request,
+      secret: process.env.NEXTAUTH_SECRET,
+    });
+
+    if (!token) {
+      const loginUrl = new URL('/login', request.url);
+      loginUrl.searchParams.set('callbackUrl', request.nextUrl.pathname);
+      return NextResponse.redirect(loginUrl);
+    }
+  }
+
+  const suffixRewrite = rewriteSuffix(request.nextUrl.pathname);
+  if (suffixRewrite) {
+    return NextResponse.rewrite(new URL(suffixRewrite, request.nextUrl));
   }
 
   if (isMarkdownPreferred(request)) {
-    const result = rewriteDocs(request.nextUrl.pathname);
+    const docsRewrite = rewriteDocs(request.nextUrl.pathname);
 
-    if (result) {
-      return NextResponse.rewrite(new URL(result, request.nextUrl));
+    if (docsRewrite) {
+      return NextResponse.rewrite(new URL(docsRewrite, request.nextUrl));
     }
   }
 
   return NextResponse.next();
 }
+
+export const config = {
+  matcher: ['/((?!api|_next/static|_next/image|favicon.ico).*)'],
+};

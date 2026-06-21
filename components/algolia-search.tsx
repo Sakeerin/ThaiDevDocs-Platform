@@ -3,6 +3,7 @@
 import { DocSearchModal } from '@docsearch/react'
 import { createPortal } from 'react-dom'
 import { useEffect, useState } from 'react'
+import { trackPlausibleEvent } from '@/lib/plausible'
 
 const algoliaAppId = process.env.NEXT_PUBLIC_ALGOLIA_APP_ID!
 const algoliaSearchKey = process.env.NEXT_PUBLIC_ALGOLIA_SEARCH_KEY!
@@ -30,6 +31,14 @@ export function AlgoliaSearchDialog({ open, onOpenChange }: SearchDialogProps) {
       onClose={() => onOpenChange(false)}
       placeholder="ค้นหาใน ThaiDevDocs..."
       initialScrollY={window.scrollY}
+      navigator={{
+        navigate({ itemUrl }) {
+          trackPlausibleEvent('search_query', {
+            destination: itemUrl,
+          })
+          window.location.assign(itemUrl)
+        },
+      }}
       // no-op: we don't use Ask AI mode
       onAskAiToggle={() => {}}
     />,

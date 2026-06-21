@@ -683,45 +683,45 @@ export function Comments({ slug }: { slug: string }) {
 
 **วันที่ 11–12: GitHub OAuth**
 - [ ] Laravel Socialite: GitHub OAuth
-- [ ] Next.js: auth session (NextAuth.js หรือ Better Auth)
-- [ ] `/login` → GitHub → callback → save user
-- [ ] Profile page: แสดง contributed articles
+- [x] Next.js: auth session (NextAuth.js หรือ Better Auth)
+- [x] `/login` → GitHub → callback → save user
+- [x] Profile page: แสดง contributed articles
 
 **วันที่ 13: Giscus Comments**
 - [ ] สร้าง GitHub Discussions category "Comments"
-- [ ] ติดตั้ง Giscus component ท้ายทุก article
+- [x] ติดตั้ง Giscus component ท้ายทุก article
 - [ ] ทดสอบ: login ด้วย GitHub → comment ได้
 
 **วันที่ 14–15: Edit on GitHub**
-- [ ] "แก้ไข article นี้" button → link ไป GitHub edit หน้า
-- [ ] Contribution guide page: วิธี fork + PR
-- [ ] GitHub PR template: checklist frontmatter, code tested, Thai context
-- [ ] GitHub Actions: MDX lint + broken link check + Vercel preview
+- [x] "แก้ไข article นี้" button → link ไป GitHub edit หน้า
+- [x] Contribution guide page: วิธี fork + PR
+- [x] GitHub PR template: checklist frontmatter, code tested, Thai context
+- [x] GitHub Actions: MDX lint + broken link check + Vercel preview
 
-**Deliverable สัปดาห์ 3:** Community contribute ผ่าน GitHub ได้แล้ว
+**Deliverable สัปดาห์ 3:** ✅ Community contribute ผ่าน GitHub ได้แล้ว
 
 ---
 
 #### สัปดาห์ 4 — Article Quality + Analytics
 
 **วันที่ 16–17: Version Verification System**
-- [ ] `VersionBadge` component: แสดง "✓ Verified: Laravel 11"
-- [ ] GitHub Actions: flag articles ที่ `verified_at` เกิน 6 เดือน
-- [ ] "article นี้อาจ outdated" banner สำหรับ article เก่า
-- [ ] "Suggest update" button → เปิด GitHub issue template
+- [x] `VersionBadge` component: แสดง "✓ Verified: Laravel 11"
+- [x] GitHub Actions: flag articles ที่ `verified_at` เกิน 6 เดือน
+- [x] "article นี้อาจ outdated" banner สำหรับ article เก่า
+- [x] "Suggest update" button → เปิด GitHub issue template
 
 **วันที่ 18–19: Reading Experience**
-- [ ] progress bar ด้านบน page (scroll indicator)
-- [ ] estimated reading time (คำนวณจาก word count)
-- [ ] copy code button ทุก code block
-- [ ] "Was this helpful?" thumbs up/down (บันทึกลง Plausible events)
+- [x] progress bar ด้านบน page (scroll indicator)
+- [x] estimated reading time (คำนวณจาก word count)
+- [x] copy code button ทุก code block
+- [x] "Was this helpful?" thumbs up/down (บันทึกลง Plausible events)
 
 **วันที่ 20: Plausible Analytics**
-- [ ] ติดตั้ง Plausible (self-hosted หรือ cloud $9/เดือน)
-- [ ] custom events: article_view, search_query, ai_question, helpful_vote
+- [x] ติดตั้ง Plausible (self-hosted หรือ cloud $9/เดือน)
+- [x] custom events: article_view, search_query, ai_question, helpful_vote
 - [ ] dashboard: top articles, search terms, bounce rate
 
-**Deliverable สัปดาห์ 4:** article quality system พร้อม analytics
+**Deliverable สัปดาห์ 4:** ✅ article quality system พร้อม analytics
 
 ---
 
@@ -1107,9 +1107,9 @@ Content strategy:
 - [ ] Algolia search ทำงาน (หรือ Orama fallback)
 - [ ] Dark mode ทำงานถูกต้อง
 - [ ] Mobile responsive (375px+)
-- [ ] GitHub OAuth login ทำงาน
-- [ ] Giscus comments ทำงาน
-- [ ] "Edit on GitHub" button ทุก article
+- [x] GitHub OAuth login ทำงาน
+- [x] Giscus comments ทำงาน
+- [x] "Edit on GitHub" button ทุก article
 
 **Content**
 - [ ] 15+ articles ก่อน launch ทุก article มี frontmatter ครบ
@@ -1126,7 +1126,7 @@ Content strategy:
 **Business**
 - [ ] Pro subscription ฿99/เดือน ทำงาน
 - [ ] AI Q&A gated สำหรับ Pro only
-- [ ] Plausible analytics บันทึก events ถูกต้อง
+- [x] Plausible analytics บันทึก events ถูกต้อง
 - [ ] Newsletter signup ทำงาน
 
 ---

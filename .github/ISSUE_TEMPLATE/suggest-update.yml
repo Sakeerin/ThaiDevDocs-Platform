@@ -1,0 +1,38 @@
+name: Suggest update
+description: แจ้งว่าบทความ outdated หรือควรอัปเดต
+title: "[Suggest Update] "
+labels:
+  - documentation
+  - stale-content
+body:
+  - type: input
+    id: page_title
+    attributes:
+      label: Page title
+      description: ชื่อบทความที่ต้องการอัปเดต
+      placeholder: Eager Loading & N+1 Query Problem ใน Laravel
+    validations:
+      required: true
+  - type: input
+    id: page_url
+    attributes:
+      label: Page URL
+      description: URL ของบทความบนเว็บไซต์
+      placeholder: /docs/laravel/eager-loading
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: What should be updated?
+      description: อธิบายว่าส่วนไหน outdated หรือควรแก้อย่างไร
+      placeholder: Laravel 12 เปลี่ยน syntax ของ with() ...
+    validations:
+      required: true
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: ตรวจสอบแล้วว่า verified_at เกิน 6 เดือน หรือ content ไม่ตรง version ปัจจุบัน
+          required: true

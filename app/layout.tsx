@@ -3,6 +3,9 @@ import { Geist, Inter } from 'next/font/google';
 import { cn } from '@/lib/utils';
 import { SiteFooter } from '@/components/site-footer';
 import { AlgoliaSearchDialog } from '@/components/algolia-search';
+import { AuthSessionProvider } from '@/components/auth-session-provider';
+import { PlausibleAnalytics } from '@/components/plausible-analytics';
+import { getSession } from '@/lib/auth';
 import './global.css';
 
 const hasAlgolia = !!(
@@ -19,7 +22,9 @@ const inter = Inter({
   subsets: ['latin'],
 });
 
-export default function Layout({ children }: LayoutProps<'/'>) {
+export default async function Layout({ children }: LayoutProps<'/'>) {
+  const session = await getSession();
+
   return (
     <html
       lang="en"
@@ -27,15 +32,18 @@ export default function Layout({ children }: LayoutProps<'/'>) {
       suppressHydrationWarning
     >
       <body className="flex flex-col min-h-screen">
-        <RootProvider
-          theme={{ defaultTheme: 'system', enableSystem: true }}
-          search={hasAlgolia ? { SearchDialog: AlgoliaSearchDialog } : undefined}
-        >
-          <div className="flex min-h-screen flex-col">
-            <div className="flex-1">{children}</div>
-            <SiteFooter />
-          </div>
-        </RootProvider>
+        <AuthSessionProvider session={session}>
+          <RootProvider
+            theme={{ defaultTheme: 'system', enableSystem: true }}
+            search={hasAlgolia ? { SearchDialog: AlgoliaSearchDialog } : undefined}
+          >
+            <PlausibleAnalytics />
+            <div className="flex min-h-screen flex-col">
+              <div className="flex-1">{children}</div>
+              <SiteFooter />
+            </div>
+          </RootProvider>
+        </AuthSessionProvider>
       </body>
     </html>
   );

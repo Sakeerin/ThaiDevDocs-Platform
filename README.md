@@ -31,8 +31,27 @@ Frontmatter is validated in `source.config.ts` using Zod. Required fields includ
 
 - `npm run lint` - run ESLint
 - `npm run types:check` - regenerate MDX types + TypeScript check
+- `npm run content:validate` - validate MDX frontmatter in `content/docs`
+- `npm run content:stale` - list articles with `verified_at` older than 6 months
 - `npm run vercel:pull` - pull Vercel preview environment variables
 - `npm run deploy:staging` - deploy preview build to Vercel
+
+## Community Features (Phase 2)
+
+- GitHub OAuth login at `/login` (NextAuth.js)
+- Profile page at `/profile` showing contributed articles
+- Giscus comments at the bottom of every docs page
+- "แก้ไข article นี้" button linking to GitHub edit flow
+- Contribution guide at `/contribute`
+- Version badge, stale content banner, reading progress, helpful votes
+- Plausible analytics with custom events (`article_view`, `search_query`, `helpful_vote`)
+
+Copy `.env.local.example` to `.env.local` and configure:
+
+- `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `NEXTAUTH_SECRET` for auth
+- `NEXT_PUBLIC_GISCUS_*` for comments (create at [giscus.app](https://giscus.app))
+- `NEXT_PUBLIC_PLAUSIBLE_DOMAIN` for analytics
+
 
 ## Vercel Staging Setup
 

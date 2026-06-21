@@ -1,8 +1,9 @@
 import Link from 'next/link';
+import { AuthNavLink } from '@/components/auth-nav-link';
 import { appName, gitConfig } from '@/lib/shared';
 
 const githubRepoUrl = `https://github.com/${gitConfig.user}/${gitConfig.repo}`;
-const contributeUrl = `${githubRepoUrl}/blob/${gitConfig.branch}/CONTRIBUTING.md`;
+const contributeGuideUrl = '/contribute';
 
 export function SiteFooter() {
   return (
@@ -13,9 +14,10 @@ export function SiteFooter() {
           <Link href={githubRepoUrl} target="_blank" rel="noreferrer noopener" className="hover:text-foreground">
             GitHub
           </Link>
-          <Link href={contributeUrl} target="_blank" rel="noreferrer noopener" className="hover:text-foreground">
+          <Link href={contributeGuideUrl} className="hover:text-foreground">
             Contribute
           </Link>
+          <AuthNavLink />
           <Link href="https://x.com" target="_blank" rel="noreferrer noopener" className="hover:text-foreground">
             X
           </Link>
