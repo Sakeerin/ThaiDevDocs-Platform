@@ -86,6 +86,13 @@ Copy additional env vars from `.env.local.example`:
 - `RESEND_API_KEY`, `RESEND_FROM_EMAIL` for newsletter emails
 - `CRON_SECRET` for weekly newsletter endpoint
 
+## Sponsors
+
+- Edit `data/sponsors.json` to add sidebar sponsors
+- Sidebar shows in docs TOC column (desktop) and TOC popover (mobile)
+- Sponsor packages and contact at `/sponsor`
+- Set `NEXT_PUBLIC_SPONSORS_ENABLED=false` to hide sponsor slots
+
 ## Vercel Staging Setup
 
 1. Login: `npx vercel login`

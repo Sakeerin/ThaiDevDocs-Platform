@@ -21,6 +21,7 @@ import { ArticleViewTracker } from '@/components/article-view-tracker';
 import { ReadingProgress } from '@/components/reading-progress';
 import { AiChatLazy } from '@/components/ai-chat-lazy';
 import { ArticleJsonLd } from '@/components/article-json-ld';
+import { DocsSponsorSidebar } from '@/components/docs-sponsor-sidebar';
 import { PremiumGate } from '@/components/premium-gate';
 import { getSession } from '@/lib/auth';
 import { getSubscriptionStatus } from '@/lib/subscription';
@@ -38,6 +39,8 @@ export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
   const pageUrl = page.url;
   const session = await getSession();
   const subscription = await getSubscriptionStatus();
+  const sponsorSidebar = <DocsSponsorSidebar />;
+  const sponsorSidebarCompact = <DocsSponsorSidebar compact />;
 
   return (
     <>
@@ -58,6 +61,11 @@ export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
         }}
         tableOfContent={{
           enabled: true,
+          footer: sponsorSidebar,
+        }}
+        tableOfContentPopover={{
+          enabled: true,
+          footer: sponsorSidebarCompact,
         }}
       >
         <DocsTitle>{page.data.title}</DocsTitle>

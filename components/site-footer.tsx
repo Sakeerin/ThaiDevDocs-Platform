@@ -17,6 +17,9 @@ export function SiteFooter() {
           <Link href={contributeGuideUrl} className="hover:text-foreground">
             Contribute
           </Link>
+          <Link href="/sponsor" className="hover:text-foreground">
+            Sponsor
+          </Link>
           <AuthNavLink />
           <Link href="https://x.com" target="_blank" rel="noreferrer noopener" className="hover:text-foreground">
             X

@@ -11,7 +11,8 @@ export type PlausibleEvent =
   | 'article_view'
   | 'search_query'
   | 'ai_question'
-  | 'helpful_vote';
+  | 'helpful_vote'
+  | 'sponsor_click';
 
 export function trackPlausibleEvent(
   event: PlausibleEvent,
