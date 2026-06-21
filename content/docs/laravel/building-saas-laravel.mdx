@@ -1,0 +1,417 @@
+---
+title: "สร้าง SaaS ด้วย Laravel — Full Guide (Pro)"
+description: "คู่มือสร้าง SaaS ด้วย Laravel 11 ตั้งแต่ architecture, subscription billing, multi-tenant, PDPA ไทย จนถึง production deployment checklist"
+topic: laravel
+subtopic: saas
+tags:
+  - saas
+  - laravel
+  - subscription
+  - multi-tenant
+  - pdpa
+  - production
+difficulty: advanced
+laravel_version: "11.x"
+verified_at: "2026-06-21"
+author: thaidevdocs-team
+contributors: []
+reading_time: 15
+is_premium: true
+---
+
+## SaaS คืออะไร — และทำไม Laravel เหมาะกับตลาดไทย
+
+**SaaS (Software as a Service)** คือ software ที่ลูกค้าจ่ายรายเดือน/รายปีเพื่อใช้งานผ่าน web — ไม่ต้องติดตั้งเอง
+
+ตัวอย่างในไทยที่ developer คุ้นเคย:
+- ระบบ POS / inventory สำหรับร้านค้า
+- HR / payroll สำหรับ SME
+- Booking system สำหรับคลินิกหรือร้านเสริมสวย
+- Internal tools สำหรับ agency
+
+Laravel เหมาะเพราะมี ecosystem ครบ: **auth, queue, billing integration, testing** — และ community ไทยใหญ่
+
+<Callout type="info">
+บทความนี้เป็น **Premium (Pro only)** — เป็น deep dive ที่รวม architecture + checklist จริงสำหรับ deploy production ไม่ใช่ tutorial สั้นๆ
+</Callout>
+
+---
+
+## Phase 0: กำหนด Product ก่อนเขียน Code
+
+ก่อน `composer create-project` ให้ตอบคำถามเหล่านี้:
+
+| คำถาม | ตัวอย่าง (ร้านค้าไทย) |
+|---|---|
+| ใครจ่ายเงิน? | เจ้าของร้าน 1 คนต่อ 1 subscription |
+| ใครใช้งานใน org? | พนักงาน 3–20 คน (roles: admin, cashier) |
+| ข้อมูลแยกกันไหม? | แต่ละร้านเห็นเฉพาะข้อมูลของตัวเอง |
+| ช่องทางชำระเงิน? | บัตร + PromptPay |
+| กฎหมายไทย? | PDPA, ใบกำกับภาษี, เก็บ log consent |
+
+**Deliverable:** 1-page PRD + wireframe 3 หน้าหลัก (dashboard, billing, settings)
+
+---
+
+## Architecture: Single DB vs Multi-tenant
+
+### แนวทางที่แนะนำสำหรับ SaaS ไทยขนาด SME (เริ่มต้น)
+
+**Single database + `tenant_id` column** — ง่ายที่สุด, deploy เร็ว, cost ต่ำ
+
+```php
+// app/Models/Concerns/BelongsToTenant.php
+trait BelongsToTenant
+{
+    protected static function bootBelongsToTenant(): void
+    {
+        static::addGlobalScope('tenant', function ($query) {
+            if ($tenantId = auth()->user()?->tenant_id) {
+                $query->where('tenant_id', $tenantId);
+            }
+        });
+
+        static::creating(function ($model) {
+            if (!$model->tenant_id && auth()->check()) {
+                $model->tenant_id = auth()->user()->tenant_id;
+            }
+        });
+    }
+}
+```
+
+```php
+// app/Models/Order.php
+class Order extends Model
+{
+    use BelongsToTenant;
+
+    protected $fillable = ['tenant_id', 'total', 'status'];
+}
+```
+
+<Callout type="warning">
+อย่าใช้ `tenant_id` จาก request โดยตรง — ต้อง derive จาก authenticated user เท่านั้น มิฉะนั้นเกิด **tenant leakage** (ข้อมูลรั่วข้าม org)
+</Callout>
+
+### เมื่อไหร่ควรอัปเกรดเป็น database-per-tenant?
+
+- Enterprise ลูกค้าไทยที่ต้องการ data isolation แบบ strict
+- Compliance ที่บังคับแยก DB
+- Tenant ใหญ่มาก (millions of rows ต่อ tenant)
+
+ใช้ package เช่น [stancl/tenancy](https://tenancyforlaravel.com/) เมื่อถึงจุดนั้น — ไม่ต้อง over-engineer ตั้งแต่วันแรก
+
+---
+
+## Database Schema ขั้นต่ำ
+
+```php
+// tenants
+Schema::create('tenants', function (Blueprint $table) {
+    $table->id();
+    $table->string('name');           // "ร้านกาแฟสยาม"
+    $table->string('slug')->unique(); // sayam-coffee
+    $table->string('plan')->default('trial');
+    $table->timestamp('trial_ends_at')->nullable();
+    $table->timestamps();
+});
+
+// users — belongs to tenant
+Schema::create('users', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('tenant_id')->constrained()->cascadeOnDelete();
+    $table->string('name');
+    $table->string('email');
+    $table->string('role')->default('member'); // owner, admin, member
+    $table->timestamps();
+    $table->unique(['tenant_id', 'email']);
+});
+
+// subscriptions — sync จาก LemonSqueezy / Stripe
+Schema::create('subscriptions', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('tenant_id')->constrained();
+    $table->string('provider');           // lemonsqueezy
+    $table->string('provider_id');        // subscription id
+    $table->string('status');             // active, cancelled, past_due
+    $table->timestamp('renews_at')->nullable();
+    $table->timestamps();
+});
+```
+
+---
+
+## Subscription Billing ด้วย LemonSqueezy
+
+ThaiDevDocs ใช้ LemonSqueezy สำหรับ Pro tier — SaaS ของคุณก็ใช้ pattern เดียวกันได้
+
+### Flow
+
+```
+User กด Upgrade
+  → redirect ไป LemonSqueezy Checkout
+  → ชำระเงินสำเร็จ
+  → webhook ยิงมา Laravel API
+  → อัปเดต subscriptions.status = active
+  → ปลดล็อก features ใน app
+```
+
+### Webhook handler (ตัวอย่าง)
+
+```php
+// app/Http/Controllers/Webhooks/LemonSqueezyWebhookController.php
+public function __invoke(Request $request)
+{
+    $signature = $request->header('X-Signature');
+    if (!$this->verifySignature($request->getContent(), $signature)) {
+        abort(401);
+    }
+
+    $event = $request->json('meta.event_name');
+    $data = $request->json('data');
+
+    match ($event) {
+        'subscription_created',
+        'subscription_updated' => $this->syncSubscription($data),
+        'subscription_cancelled' => $this->cancelSubscription($data),
+        default => null,
+    };
+
+    return response()->json(['ok' => true]);
+}
+
+protected function syncSubscription(array $data): void
+{
+    $tenant = Tenant::where('billing_email', $data['attributes']['user_email'])->firstOrFail();
+
+    Subscription::updateOrCreate(
+        ['provider_id' => $data['id']],
+        [
+            'tenant_id' => $tenant->id,
+            'provider' => 'lemonsqueezy',
+            'status' => $data['attributes']['status'],
+            'renews_at' => $data['attributes']['renews_at'],
+        ],
+    );
+}
+```
+
+<Callout type="info">
+ถ้าต้องการ **PromptPay** สำหรับลูกค้าไทยที่ไม่มีบัตร — integrate Omise แยกสำหรับ one-time หรือ recurring ดูที่บทความ [Omise + PromptPay](/docs/thai-context/omise-promptpay)
+</Callout>
+
+---
+
+## Feature Gating ใน Laravel
+
+```php
+// app/Services/PlanService.php
+class PlanService
+{
+    public function can(Tenant $tenant, string $feature): bool
+    {
+        $plan = $tenant->subscription?->status === 'active'
+            ? $tenant->plan
+            : 'free';
+
+        return config("plans.{$plan}.features.{$feature}", false);
+    }
+}
+```
+
+```php
+// config/plans.php
+return [
+    'free' => [
+        'features' => [
+            'reports' => false,
+            'api_access' => false,
+            'max_users' => 2,
+        ],
+    ],
+    'pro' => [
+        'features' => [
+            'reports' => true,
+            'api_access' => true,
+            'max_users' => 20,
+        ],
+    ],
+];
+```
+
+```php
+// Middleware หรือ Policy
+if (!app(PlanService::class)->can($tenant, 'reports')) {
+    abort(403, 'อัปเกรดแผน Pro เพื่อดูรายงาน');
+}
+```
+
+---
+
+## PDPA & ข้อมูลส่วนบุคคล (บริบทไทย)
+
+SaaS ที่เก็บข้อมูลลูกค้าไทย **ต้อง** มี:
+
+1. **Privacy Policy** ภาษาไทย — ระบุวัตถุประสงค์การเก็บข้อมูล
+2. **Consent log** — บันทึกว่า user ยอมรับเมื่อไหร่
+3. **Data export / delete** — endpoint ให้ user ขอข้อมูลหรือลบ account
+4. **Retention policy** — ลบ log ที่ไม่จำเป็นหลัง X เดือน
+
+```php
+// app/Models/ConsentLog.php
+Schema::create('consent_logs', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('user_id')->constrained();
+    $table->string('type');        // privacy_policy, marketing
+    $table->string('version');     // v2026-06
+    $table->ipAddress('ip')->nullable();
+    $table->timestamp('accepted_at');
+});
+```
+
+อ่านเพิ่ม: [PDPA compliance ใน Laravel](/docs/thai-context/pdpa)
+
+---
+
+## Queue, Scheduler & Background Jobs
+
+SaaS production **ต้อง** ใช้ queue — อย่ารัน heavy task ใน HTTP request
+
+```php
+// ตัวอย่าง: ส่ง invoice email หลัง subscription สำเร็จ
+SubscriptionActivated::dispatch($subscription);
+
+// app/Listeners/SendInvoiceEmail.php
+class SendInvoiceEmail
+{
+    public function handle(SubscriptionActivated $event): void
+    {
+        Mail::to($event->tenant->billing_email)
+            ->queue(new InvoiceMail($event->subscription));
+    }
+}
+```
+
+**Forge scheduler** (production):
+
+```bash
+* * * * * cd /home/forge/app.example.com && php artisan schedule:run >> /dev/null 2>&1
+```
+
+ดูเพิ่ม: [Queue & Jobs](/docs/laravel/queue-jobs), [Laravel Forge](/docs/devops/laravel-forge)
+
+---
+
+## Production Deployment Checklist
+
+ใช้ checklist นี้ก่อนเปิดให้ลูกค้าจริง:
+
+### Infrastructure
+
+- [ ] Server region ใกล้ไทย (Singapore / Bangkok ถ้ามี)
+- [ ] PHP 8.3+, MySQL 8 / PostgreSQL 15, Redis
+- [ ] SSL certificate (Let's Encrypt via Forge)
+- [ ] `APP_DEBUG=false`, `APP_ENV=production`
+- [ ] Queue worker + Horizon (ถ้าใช้ Redis queue)
+- [ ] Scheduler cron ทำงาน
+
+### Application
+
+- [ ] `php artisan config:cache route:cache view:cache`
+- [ ] Migration รันบน production แล้ว
+- [ ] Storage link (`php artisan storage:link`)
+- [ ] File backup strategy (DB + S3/files daily)
+- [ ] Error tracking (Sentry / Flare)
+
+### Security
+
+- [ ] Rate limiting บน login + API
+- [ ] CSRF เปิดทุก form
+- [ ] Webhook signature verification
+- [ ] Secrets ใน `.env` ไม่ commit
+- [ ] 2FA สำหรับ owner account (แนะนำ)
+
+### Monitoring
+
+- [ ] Uptime monitoring (UptimeRobot / Better Stack)
+- [ ] Laravel Telescope ปิดบน production (หรือ gate ด้วย auth)
+- [ ] Horizon dashboard ปิด public
+- [ ] Log rotation ตั้งค่าแล้ว
+
+### Business
+
+- [ ] Terms of Service + Privacy Policy publish แล้ว
+- [ ] ใบกำกับภาษี / billing flow ชัดเจน (ถ้ารับเงินในไทย)
+- [ ] Support channel (LINE OA / email) พร้อม
+
+---
+
+## Testing ก่อน Launch
+
+```php
+// tests/Feature/TenantIsolationTest.php
+it('prevents cross-tenant data access', function () {
+    $tenantA = Tenant::factory()->create();
+    $tenantB = Tenant::factory()->create();
+
+    $userA = User::factory()->for($tenantA)->create();
+    $orderB = Order::factory()->for($tenantB)->create();
+
+    $this->actingAs($userA)
+        ->get(route('orders.show', $orderB))
+        ->assertForbidden();
+});
+
+it('gates premium features by plan', function () {
+    $tenant = Tenant::factory()->create(['plan' => 'free']);
+    $user = User::factory()->for($tenant)->create();
+
+    $this->actingAs($user)
+        ->get(route('reports.index'))
+        ->assertForbidden();
+});
+```
+
+ดูเพิ่ม: [Testing ด้วย Pest](/docs/laravel/testing-pest)
+
+---
+
+## Tech Stack แนะนำ (2026)
+
+| Layer | แนะนำ | เหตุผล |
+|---|---|---|
+| Backend | Laravel 11 + PHP 8.3 | ecosystem, hiring ในไทย |
+| Frontend | Inertia + Vue 3 หรือ Livewire | SPA feel โดยไม่แยก API |
+| DB | PostgreSQL | JSON, full-text, pgvector ถ้าต้อง AI |
+| Cache/Queue | Redis | Horizon, session, cache |
+| File storage | S3 / Cloudflare R2 | backup, CDN |
+| Email | Resend / Postmark | transactional |
+| Billing | LemonSqueezy หรือ Stripe | subscription + webhook |
+| Hosting | Laravel Forge + DO/Hetzner | deploy ง่าย |
+| Monitoring | Sentry + UptimeRobot | error + uptime |
+
+---
+
+## สรุป Roadmap 90 วัน
+
+```
+วัน 1–14   PRD + schema + auth + tenant isolation
+วัน 15–30  Core features + LemonSqueezy checkout
+วัน 31–45  PDPA consent + admin panel + tests
+วัน 46–60  Staging deploy + beta 5–10 ร้าน/บริษัท
+วัน 61–75  Fix bugs จาก beta + performance tuning
+วัน 76–90  Production launch + monitoring + support flow
+```
+
+<Callout type="success">
+SaaS ที่ประสบความสำเร็จในไทยมักไม่ใช่ tech ที่ซับส้อนที่สุด — แต่เป็น product ที่ **แก้ pain point ชัด + support ดี + ชำระเงินง่าย (PromptPay/บัตร)**
+</Callout>
+
+---
+
+## บทความ Premium ถัดไป
+
+- Production deployment checklist ฉบับสมบูรณ์
+- Security hardening ใน Laravel
+- Database design สำหรับ Thai business

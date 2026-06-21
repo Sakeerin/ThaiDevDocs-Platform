@@ -38,6 +38,9 @@ const faqs = [
 export default async function PricingPage() {
   const { isPro } = await getSubscriptionStatus();
   const articleCount = source.getPages().length;
+  const premiumPages = source
+    .getPages()
+    .filter((page) => page.data.is_premium && page.url !== '/docs');
   const monthlyCheckout = getCheckoutUrl('monthly');
   const annualCheckout = getCheckoutUrl('annual');
 
@@ -108,6 +111,28 @@ export default async function PricingPage() {
           )}
         </div>
       </div>
+
+      {premiumPages.length > 0 ? (
+        <section className="space-y-4">
+          <h2 className="text-2xl font-semibold">Premium articles</h2>
+          <p className="text-sm text-fd-muted-foreground">
+            Deep dives สำหรับ Pro members — architecture, production checklist, security
+          </p>
+          <ul className="grid gap-3 sm:grid-cols-2">
+            {premiumPages.map((page) => (
+              <li key={page.url}>
+                <Link
+                  href={page.url}
+                  className="block rounded-xl border p-4 transition-colors hover:border-fd-primary/40 hover:bg-fd-muted/30"
+                >
+                  <p className="font-medium">{page.data.title}</p>
+                  <p className="mt-1 text-sm text-fd-muted-foreground">{page.data.description}</p>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <section className="space-y-4">
         <h2 className="text-2xl font-semibold">FAQ</h2>

@@ -11,6 +11,7 @@
     "service-container",
     "policies-gates",
     "api-resources",
-    "testing-pest"
+    "testing-pest",
+    "building-saas-laravel"
   ]
 }

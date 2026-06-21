@@ -951,7 +951,7 @@ Thai Context เพิ่มเติม (7 articles):
 - [ ] Performance optimization ขั้นสูง
 
 **Premium Content (Pro only):**
-- [ ] สร้าง SaaS ด้วย Laravel — full guide
+- [x] สร้าง SaaS ด้วย Laravel — full guide
 - [ ] Production deployment checklist ฉบับสมบูรณ์
 - [ ] Security hardening ใน Laravel
 - [ ] Database design สำหรับ Thai business
