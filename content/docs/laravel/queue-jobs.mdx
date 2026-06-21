@@ -1,0 +1,309 @@
+---
+title: "Queue & Jobs ใน Laravel — ทำงาน Background อย่างมืออาชีพ"
+description: "เรียนรู้การสร้าง Queue Jobs ใน Laravel สำหรับงาน background เช่น ส่ง email, ประมวลผล payment, resize รูปภาพ พร้อม retry, failed jobs และ monitoring"
+topic: laravel
+subtopic: queue
+tags:
+  - queue
+  - jobs
+  - background
+  - redis
+  - email
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-27"
+author: thaidevdocs-team
+contributors: []
+reading_time: 13
+is_premium: false
+---
+
+## Queue คืออะไร และทำไมถึงต้องใช้?
+
+**Queue** คือระบบที่เอางานที่ใช้เวลานานออกไปทำ background แทนที่จะบล็อก HTTP request ของ user
+
+**ตัวอย่างงานที่ควรใช้ Queue:**
+- ส่ง email (ใช้เวลา 1-3 วินาที)
+- ส่ง LINE notification
+- ประมวลผล payment กับ Omise
+- Resize / optimize รูปภาพ
+- Generate PDF ใบเสร็จ
+- Sync ข้อมูลไปยัง third-party API
+
+```
+ไม่ใช้ Queue:                ใช้ Queue:
+User → Request → [ส่ง email] → Response    User → Request → Response (เร็ว)
+                  (รอ 3 วินาที)                              ↓ (background)
+                                                        [ส่ง email]
+```
+
+---
+
+## ตั้งค่า Queue Driver
+
+### แนะนำ: Redis (production)
+
+```bash
+# .env
+QUEUE_CONNECTION=redis
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+```
+
+### Sync (development — ทำงานทันทีไม่ต้อง worker)
+
+```bash
+# .env
+QUEUE_CONNECTION=sync
+```
+
+### Database (ถ้าไม่มี Redis)
+
+```bash
+# .env
+QUEUE_CONNECTION=database
+
+# สร้าง jobs table
+php artisan queue:table
+php artisan migrate
+```
+
+---
+
+## สร้าง Job
+
+```bash
+php artisan make:job SendOrderConfirmationEmail
+```
+
+```php
+// app/Jobs/SendOrderConfirmationEmail.php
+namespace App\Jobs;
+
+use App\Models\Order;
+use App\Mail\OrderConfirmationMail;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Mail;
+
+class SendOrderConfirmationEmail implements ShouldQueue
+{
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+
+    public int $tries = 3;           // retry สูงสุด 3 ครั้ง
+    public int $timeout = 60;        // timeout 60 วินาที
+    public int $backoff = 30;        // รอ 30 วินาทีก่อน retry
+
+    public function __construct(
+        public readonly Order $order  // Eloquent Model จะถูก serialize/restore อัตโนมัติ
+    ) {}
+
+    public function handle(): void
+    {
+        Mail::to($this->order->customer->email)
+            ->send(new OrderConfirmationMail($this->order));
+    }
+
+    public function failed(\Throwable $exception): void
+    {
+        // รันเมื่อ job fail ทุก retry แล้ว
+        \Log::error("ส่ง confirmation email ไม่สำเร็จ: order #{$this->order->order_number}", [
+            'error' => $exception->getMessage(),
+        ]);
+
+        // แจ้ง admin
+        Notification::route('slack', config('services.slack.webhook'))
+            ->notify(new JobFailedNotification($this->order, $exception));
+    }
+}
+```
+
+---
+
+## Dispatch Job
+
+```php
+// app/Http/Controllers/CheckoutController.php
+
+public function store(CheckoutRequest $request)
+{
+    $order = Order::create([
+        'customer_id'    => auth()->id(),
+        'total_amount'   => $request->total,
+        'payment_method' => $request->payment_method,
+    ]);
+
+    // Dispatch ทันที (ไปเข้า queue)
+    SendOrderConfirmationEmail::dispatch($order);
+
+    // Dispatch แบบ delay — ส่งหลังจาก 5 นาที
+    SendFollowUpEmail::dispatch($order)->delay(now()->addMinutes(5));
+
+    // Dispatch เข้า queue ชื่อ 'emails' (priority queue)
+    SendOrderConfirmationEmail::dispatch($order)->onQueue('emails');
+
+    return redirect()->route('orders.show', $order);
+}
+```
+
+---
+
+## Queue Priorities
+
+กำหนดหลาย queue เพื่อจัดลำดับความสำคัญ:
+
+```php
+// ส่ง notification เร่งด่วนเข้า high queue
+SendPaymentReceivedSMS::dispatch($order)->onQueue('high');
+
+// งานทั่วไปเข้า default queue
+ProcessReportJob::dispatch($report)->onQueue('default');
+
+// งานไม่เร่งด่วนเข้า low queue
+GenerateMonthlyReport::dispatch()->onQueue('low');
+```
+
+```bash
+# Worker ทำงานตามลำดับ: high ก่อน → default → low
+php artisan queue:work --queue=high,default,low
+```
+
+---
+
+## Chaining Jobs
+
+รัน jobs ต่อกันเป็นลำดับ:
+
+```php
+use Illuminate\Support\Facades\Bus;
+
+Bus::chain([
+    new ProcessPayment($order),          // 1. ชำระเงิน
+    new UpdateInventory($order),          // 2. ตัดสต็อก
+    new SendOrderConfirmationEmail($order), // 3. ส่ง email
+    new NotifyWarehouse($order),          // 4. แจ้ง warehouse
+])->dispatch();
+```
+
+---
+
+## Job Batching
+
+รัน jobs พร้อมกันหลายตัว แล้วรู้ว่าทั้งหมดเสร็จเมื่อไหร่:
+
+```php
+use Illuminate\Support\Facades\Bus;
+
+$batch = Bus::batch([
+    new SendEmailToCustomer($customer1),
+    new SendEmailToCustomer($customer2),
+    new SendEmailToCustomer($customer3),
+])->then(function (Batch $batch) {
+    // รันเมื่อทุก job เสร็จ
+    \Log::info("ส่ง email ครบ {$batch->totalJobs} คนแล้ว");
+})->catch(function (Batch $batch, \Throwable $e) {
+    // รันเมื่อ job ใด job หนึ่ง fail
+    \Log::error("ส่ง email บางคนไม่สำเร็จ");
+})->dispatch();
+```
+
+---
+
+## Failed Jobs
+
+ดู jobs ที่ fail:
+
+```bash
+# ดู failed jobs
+php artisan queue:failed
+
+# retry failed job ตาม ID
+php artisan queue:retry 5
+
+# retry ทั้งหมด
+php artisan queue:retry all
+
+# ลบ failed jobs เก่ากว่า 7 วัน
+php artisan queue:flush
+```
+
+---
+
+## รัน Queue Worker
+
+```bash
+# รัน worker (development)
+php artisan queue:work
+
+# รัน worker แบบ daemon (production)
+php artisan queue:work redis --daemon --sleep=3 --tries=3
+
+# ใช้ Supervisor (production — restart อัตโนมัติ)
+```
+
+### Supervisor Config (production)
+
+```ini
+; /etc/supervisor/conf.d/laravel-worker.conf
+[program:laravel-worker]
+process_name=%(program_name)s_%(process_num)02d
+command=php /var/www/artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+user=www-data
+numprocs=4
+redirect_stderr=true
+stdout_logfile=/var/www/storage/logs/worker.log
+stopwaitsecs=3600
+```
+
+---
+
+## ตัวอย่าง Real World: ประมวลผล PromptPay Payment
+
+```php
+// app/Jobs/ProcessPromptPayPayment.php
+class ProcessPromptPayPayment implements ShouldQueue
+{
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+
+    public int $tries = 5;
+    public array $backoff = [30, 60, 120, 300, 600]; // exponential backoff
+
+    public function __construct(
+        public readonly Order $order,
+        public readonly string $transactionRef,
+    ) {}
+
+    public function handle(OmiseService $omise): void
+    {
+        $result = $omise->verifyPromptPayTransaction($this->transactionRef);
+
+        if ($result->isSuccessful()) {
+            $this->order->update([
+                'status'     => 'confirmed',
+                'paid_at'    => now(),
+                'payment_ref' => $result->referenceNumber,
+            ]);
+
+            SendOrderConfirmationEmail::dispatch($this->order);
+        } elseif ($result->isPending()) {
+            // ยังรอ — throw เพื่อ retry
+            throw new \Exception('Payment still pending');
+        } else {
+            // Payment failed — ยกเลิก order
+            $this->order->update(['status' => 'payment_failed']);
+            $this->fail();
+        }
+    }
+}
+```
+
+<Callout type="tip">
+ใช้ Laravel Horizon สำหรับ monitor queue ใน production — ดู throughput, failed jobs, และ queue lengths แบบ real-time ผ่าน `/horizon` dashboard
+</Callout>

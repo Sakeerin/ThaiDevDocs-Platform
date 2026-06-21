@@ -1,0 +1,296 @@
+---
+title: "Service Container & Dependency Injection ใน Laravel"
+description: "เข้าใจ Service Container, Dependency Injection, และ Service Provider ใน Laravel 11 พร้อมตัวอย่างการ bind, resolve และสร้าง decoupled architecture"
+topic: laravel
+subtopic: architecture
+tags:
+  - service-container
+  - dependency-injection
+  - service-provider
+  - architecture
+  - ioc
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-27"
+author: thaidevdocs-team
+contributors: []
+reading_time: 12
+is_premium: false
+---
+
+## Service Container คืออะไร?
+
+**Service Container** (หรือ IoC Container) คือ "กล่องเก็บ services" ของ Laravel ทำหน้าที่จัดการการสร้าง object และ inject dependencies โดยอัตโนมัติ
+
+แทนที่จะสร้าง object เอง:
+```php
+// ❌ ไม่ดี: สร้าง dependencies เอง — ทดสอบยาก
+class OrderController
+{
+    public function store()
+    {
+        $omise = new OmiseService(config('services.omise.key')); // hardcoded
+        $mailer = new Mailer(config('mail.host'), config('mail.port'));
+        // ...
+    }
+}
+```
+
+ให้ Laravel inject ให้:
+```php
+// ✅ ดี: รับ dependencies ผ่าน constructor — ทดสอบง่าย
+class OrderController
+{
+    public function __construct(
+        private readonly OmiseService $omise,
+        private readonly Mailer $mailer,
+    ) {}
+
+    public function store(Request $request)
+    {
+        // ใช้ $this->omise และ $this->mailer ได้เลย
+    }
+}
+```
+
+---
+
+## Dependency Injection คืออะไร?
+
+DI คือการส่ง dependency (object ที่ต้องการ) เข้าไปผ่าน constructor หรือ method แทนที่จะสร้างเองข้างใน
+
+**ประโยชน์:**
+- ทดสอบได้ง่าย (swap real service ด้วย mock ได้)
+- เปลี่ยน implementation ได้โดยไม่แก้ code ที่ใช้งาน
+- ลด coupling ระหว่าง classes
+
+---
+
+## Auto-Resolution (Zero Configuration)
+
+Laravel resolve dependencies อัตโนมัติถ้าเป็น concrete class:
+
+```php
+// app/Services/TaxCalculator.php
+class TaxCalculator
+{
+    public function calculate(float $amount): float
+    {
+        return $amount * 0.07; // VAT 7%
+    }
+}
+```
+
+```php
+// app/Http/Controllers/InvoiceController.php
+class InvoiceController extends Controller
+{
+    public function __construct(
+        private readonly TaxCalculator $taxCalculator, // inject อัตโนมัติ
+    ) {}
+
+    public function create(Request $request)
+    {
+        $vatAmount = $this->taxCalculator->calculate($request->subtotal);
+        // ...
+    }
+}
+```
+
+ไม่ต้องทำอะไรเพิ่ม — Laravel สร้าง `TaxCalculator` ให้อัตโนมัติ
+
+---
+
+## Binding Interface ไปยัง Implementation
+
+เพื่อให้ switch implementation ได้ง่าย ให้ inject ผ่าน Interface:
+
+```php
+// app/Contracts/PaymentGateway.php
+interface PaymentGateway
+{
+    public function charge(int $amount, string $currency, array $options): PaymentResult;
+    public function refund(string $transactionId): RefundResult;
+}
+```
+
+```php
+// app/Services/OmisePaymentGateway.php
+class OmisePaymentGateway implements PaymentGateway
+{
+    public function charge(int $amount, string $currency, array $options): PaymentResult
+    {
+        // เรียก Omise API
+    }
+
+    public function refund(string $transactionId): RefundResult
+    {
+        // เรียก Omise refund API
+    }
+}
+```
+
+```php
+// app/Providers/AppServiceProvider.php
+use App\Contracts\PaymentGateway;
+use App\Services\OmisePaymentGateway;
+
+public function register(): void
+{
+    $this->app->bind(PaymentGateway::class, OmisePaymentGateway::class);
+}
+```
+
+```php
+// app/Http/Controllers/CheckoutController.php
+class CheckoutController extends Controller
+{
+    public function __construct(
+        private readonly PaymentGateway $payment, // inject OmisePaymentGateway
+    ) {}
+
+    public function store(CheckoutRequest $request)
+    {
+        $result = $this->payment->charge(
+            amount: $request->total * 100, // Omise ใช้ satang
+            currency: 'THB',
+            options: ['source' => $request->payment_source]
+        );
+    }
+}
+```
+
+<Callout type="tip">
+ถ้าต้องการเปลี่ยนจาก Omise เป็น Stripe หรือ KBank ในอนาคต แค่เปลี่ยนใน `AppServiceProvider` หนึ่งบรรทัด ไม่ต้องแก้ controller เลย
+</Callout>
+
+---
+
+## Binding Types
+
+### `bind()` — สร้าง instance ใหม่ทุกครั้ง
+
+```php
+$this->app->bind(PaymentGateway::class, OmisePaymentGateway::class);
+```
+
+### `singleton()` — สร้างครั้งเดียว ใช้ instance เดิมตลอด request
+
+```php
+// เหมาะกับ service ที่ stateless และสร้างหนักๆ เช่น HTTP client
+$this->app->singleton(OmiseClient::class, function ($app) {
+    return new OmiseClient(config('services.omise.secret_key'));
+});
+```
+
+### `instance()` — bind ด้วย object ที่มีอยู่แล้ว
+
+```php
+$omise = new OmiseClient($secretKey);
+$this->app->instance(OmiseClient::class, $omise);
+```
+
+### `bindIf()` — bind เฉพาะถ้ายังไม่ได้ bind
+
+```php
+$this->app->bindIf(LoggerInterface::class, FileLogger::class);
+```
+
+---
+
+## Contextual Binding
+
+inject implementation ที่แตกต่างกันตาม context:
+
+```php
+// app/Providers/AppServiceProvider.php
+public function register(): void
+{
+    $this->app
+        ->when(InvoiceController::class)
+        ->needs(PaymentGateway::class)
+        ->give(OmisePaymentGateway::class);
+
+    $this->app
+        ->when(TestController::class)
+        ->needs(PaymentGateway::class)
+        ->give(FakePaymentGateway::class); // ใช้ fake สำหรับ testing
+}
+```
+
+---
+
+## Resolving จาก Container โดยตรง
+
+```php
+// ผ่าน app() helper
+$payment = app(PaymentGateway::class);
+$result  = $payment->charge(100000, 'THB', []);
+
+// ผ่าน resolve() helper
+$calculator = resolve(TaxCalculator::class);
+
+// ผ่าน make() — ใน class ที่มี $this->app
+$service = $this->app->make(OmiseService::class);
+```
+
+---
+
+## ตัวอย่าง Real World: Thai Payment Service
+
+```php
+// app/Providers/PaymentServiceProvider.php
+class PaymentServiceProvider extends ServiceProvider
+{
+    public function register(): void
+    {
+        $this->app->singleton(PaymentGateway::class, function ($app) {
+            return match (config('services.payment.driver')) {
+                'omise'  => new OmisePaymentGateway(
+                    config('services.omise.public_key'),
+                    config('services.omise.secret_key'),
+                ),
+                'kbank'  => new KBankPaymentGateway(
+                    config('services.kbank.merchant_id'),
+                    config('services.kbank.api_key'),
+                ),
+                default  => throw new \InvalidArgumentException('Unknown payment driver'),
+            };
+        });
+    }
+}
+```
+
+```php
+// config/services.php
+'payment' => [
+    'driver' => env('PAYMENT_DRIVER', 'omise'),
+],
+
+'omise' => [
+    'public_key' => env('OMISE_PUBLIC_KEY'),
+    'secret_key' => env('OMISE_SECRET_KEY'),
+],
+```
+
+```bash
+# .env
+PAYMENT_DRIVER=omise
+# เปลี่ยนเป็น kbank ได้ทันที
+```
+
+---
+
+## สรุป
+
+```
+Service Container = กล่องเก็บ + factory ของ services
+
+DI = รับ service ผ่าน constructor แทนสร้างเอง
+
+bind()      = สร้าง instance ใหม่ทุกครั้ง
+singleton() = ใช้ instance เดิมตลอด request
+bindIf()    = bind เฉพาะถ้ายังไม่ได้ bind
+
+ประโยชน์สูงสุด: ทดสอบง่าย + เปลี่ยน implementation ได้โดยไม่แก้ code
+```

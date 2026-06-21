@@ -1,0 +1,238 @@
+---
+title: "Eloquent Scopes ใน Laravel — Local และ Global Scope"
+description: "เรียนรู้การใช้ Local Scope และ Global Scope ใน Eloquent เพื่อ reuse query logic ลด code ซ้ำ และเพิ่ม readability ด้วยตัวอย่างจริง"
+topic: laravel
+subtopic: eloquent
+tags:
+  - eloquent
+  - scopes
+  - query
+  - orm
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-27"
+author: thaidevdocs-team
+contributors: []
+reading_time: 10
+is_premium: false
+---
+
+## Eloquent Scope คืออะไร?
+
+**Scope** คือการห่อหุ้ม query logic ที่ใช้บ่อยๆ ไว้ในชื่อที่อ่านเข้าใจง่าย แทนที่จะเขียน condition ซ้ำๆ ทุกที่
+
+มี 2 ประเภท:
+- **Local Scope** — เรียกใช้เมื่อต้องการ (`->active()`)
+- **Global Scope** — ใช้อัตโนมัติทุก query บน Model นั้น
+
+---
+
+## Local Scope
+
+### กำหนด Local Scope
+
+ตั้งชื่อ method ว่า `scope` + ชื่อ scope (PascalCase):
+
+```php
+// app/Models/Product.php
+class Product extends Model
+{
+    // Scope: เฉพาะสินค้าที่ active
+    public function scopeActive(Builder $query): void
+    {
+        $query->where('is_active', true);
+    }
+
+    // Scope: เฉพาะสินค้าที่มีในสต็อก
+    public function scopeInStock(Builder $query): void
+    {
+        $query->where('stock_quantity', '>', 0);
+    }
+
+    // Scope พร้อม parameter: สินค้าในช่วงราคา
+    public function scopePriceBetween(Builder $query, int $min, int $max): void
+    {
+        $query->whereBetween('price', [$min, $max]);
+    }
+
+    // Scope: สินค้าขายดีในเดือนนี้
+    public function scopeTopSelling(Builder $query, int $limit = 10): void
+    {
+        $query->orderByDesc('sales_count')->limit($limit);
+    }
+}
+```
+
+### การใช้ Local Scope
+
+```php
+// ❌ ก่อนใช้ Scope — อ่านยาก, เขียนซ้ำ
+$products = Product::where('is_active', true)
+    ->where('stock_quantity', '>', 0)
+    ->whereBetween('price', [100, 500])
+    ->orderByDesc('sales_count')
+    ->limit(10)
+    ->get();
+
+// ✅ หลังใช้ Scope — อ่านเข้าใจทันที
+$products = Product::active()
+    ->inStock()
+    ->priceBetween(100, 500)
+    ->topSelling(10)
+    ->get();
+```
+
+<Callout type="tip">
+Scope ทำให้ controller code อ่านเหมือนภาษาอังกฤษ ทีมใหม่เข้าใจได้เร็วกว่า raw query
+</Callout>
+
+### ตัวอย่างจริง: ระบบ e-commerce ไทย
+
+```php
+// app/Models/Order.php
+class Order extends Model
+{
+    // เฉพาะออเดอร์ที่รอชำระเงิน
+    public function scopePendingPayment(Builder $query): void
+    {
+        $query->where('status', 'pending_payment');
+    }
+
+    // เฉพาะออเดอร์วันนี้
+    public function scopeToday(Builder $query): void
+    {
+        $query->whereDate('created_at', today());
+    }
+
+    // เฉพาะออเดอร์ที่ใช้ PromptPay
+    public function scopeViaPromptPay(Builder $query): void
+    {
+        $query->where('payment_method', 'promptpay');
+    }
+
+    // เฉพาะออเดอร์มูลค่าสูงกว่าที่กำหนด
+    public function scopeHighValue(Builder $query, int $amount = 5000): void
+    {
+        $query->where('total_amount', '>=', $amount);
+    }
+}
+```
+
+```php
+// ใน Controller
+$pendingOrders = Order::pendingPayment()->today()->get();
+$bigOrders = Order::viaPromptPay()->highValue(10000)->get();
+```
+
+---
+
+## Global Scope
+
+**Global Scope** ถูก apply อัตโนมัติทุก query บน Model — ไม่ต้องเรียกเอง
+
+ใช้บ่อยสำหรับ **Soft Delete**, **Multi-tenancy**, หรือ filter ที่ต้องใช้เสมอ
+
+### สร้าง Global Scope class
+
+```php
+// app/Models/Scopes/ActiveScope.php
+namespace App\Models\Scopes;
+
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Scope;
+
+class ActiveScope implements Scope
+{
+    public function apply(Builder $builder, Model $model): void
+    {
+        $builder->where('is_active', true);
+    }
+}
+```
+
+### Register Global Scope กับ Model
+
+```php
+// app/Models/Product.php
+use App\Models\Scopes\ActiveScope;
+
+class Product extends Model
+{
+    protected static function booted(): void
+    {
+        static::addGlobalScope(new ActiveScope());
+    }
+}
+```
+
+```php
+// ตอนนี้ query ทั้งหมดจะ filter เฉพาะ active products อัตโนมัติ
+$products = Product::all();
+// SELECT * FROM products WHERE is_active = 1
+
+// ถ้าต้องการข้าม Global Scope
+$allProducts = Product::withoutGlobalScope(ActiveScope::class)->get();
+$allProducts = Product::withoutGlobalScopes()->get(); // ข้ามทุก scope
+```
+
+### ตัวอย่าง: Multi-tenant Global Scope
+
+```php
+// app/Models/Scopes/TenantScope.php
+class TenantScope implements Scope
+{
+    public function apply(Builder $builder, Model $model): void
+    {
+        if (auth()->check()) {
+            $builder->where('company_id', auth()->user()->company_id);
+        }
+    }
+}
+```
+
+```php
+// app/Models/Invoice.php
+class Invoice extends Model
+{
+    protected static function booted(): void
+    {
+        static::addGlobalScope(new TenantScope());
+    }
+}
+```
+
+```php
+// ทุก query จะ filter ตาม company_id ของ user ที่ login อยู่อัตโนมัติ
+$invoices = Invoice::all();
+// SELECT * FROM invoices WHERE company_id = 42
+```
+
+---
+
+## Anonymous Global Scope
+
+สำหรับ scope ง่ายๆ ไม่ต้องสร้าง class แยก:
+
+```php
+class Product extends Model
+{
+    protected static function booted(): void
+    {
+        static::addGlobalScope('active', function (Builder $builder) {
+            $builder->where('is_active', true);
+        });
+    }
+}
+```
+
+---
+
+## สรุปเปรียบเทียบ
+
+| | Local Scope | Global Scope |
+|---|---|---|
+| การใช้งาน | เรียกเองเมื่อต้องการ | อัตโนมัติทุก query |
+| ตัวอย่าง | `->active()`, `->inStock()` | Soft delete, Tenant filter |
+| ข้าม scope ได้ไหม | ไม่เรียกก็ไม่ใช้ | `withoutGlobalScope()` |
+| เหมาะกับ | Filter ที่ optional | Filter ที่ต้องใช้เสมอ |

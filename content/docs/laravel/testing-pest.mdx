@@ -1,0 +1,315 @@
+---
+title: "Laravel Testing ด้วย Pest — คู่มือเริ่มต้น"
+description: "เรียนรู้การเขียน test ใน Laravel ด้วย Pest PHP พร้อมตัวอย่าง Feature Test, Unit Test, Database Testing และ Mock สำหรับโปรเจคจริง"
+topic: laravel
+subtopic: testing
+tags:
+  - testing
+  - pest
+  - tdd
+  - unit-test
+  - feature-test
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-27"
+author: thaidevdocs-team
+contributors: []
+reading_time: 14
+is_premium: false
+---
+
+## ทำไมต้องเขียน Test?
+
+- จับ bug ก่อน deploy ไป production
+- Refactor ได้อย่างมั่นใจ
+- Document behavior ของ code
+- ลด manual testing ที่เสียเวลา
+
+**Pest** คือ testing framework สำหรับ PHP ที่ syntax สวยกว่า PHPUnit มาก ปัจจุบัน Laravel ใช้ Pest เป็น default
+
+---
+
+## ติดตั้งและตั้งค่า
+
+Pest มาพร้อม Laravel 11 แล้ว รัน test ได้เลย:
+
+```bash
+php artisan test
+# หรือ
+./vendor/bin/pest
+```
+
+---
+
+## โครงสร้าง Test
+
+```
+tests/
+├── Feature/          — ทดสอบ HTTP endpoints, database, mail ฯลฯ
+│   ├── OrderTest.php
+│   └── CheckoutTest.php
+├── Unit/             — ทดสอบ class/method แยก
+│   ├── TaxCalculatorTest.php
+│   └── OrderNumberGeneratorTest.php
+└── Pest.php          — global helpers, datasets
+```
+
+---
+
+## Unit Test
+
+ทดสอบ business logic ที่ไม่ต้องการ database หรือ HTTP:
+
+```php
+// tests/Unit/TaxCalculatorTest.php
+use App\Services\TaxCalculator;
+
+test('คำนวณ VAT 7% ได้ถูกต้อง', function () {
+    $calculator = new TaxCalculator();
+
+    expect($calculator->calculate(1000))->toBe(70.0);
+    expect($calculator->calculate(0))->toBe(0.0);
+});
+
+test('คำนวณราคารวม VAT ได้ถูกต้อง', function () {
+    $calculator = new TaxCalculator();
+
+    expect($calculator->totalWithVat(1000))->toBe(1070.0);
+});
+
+// Dataset — ทดสอบหลาย case พร้อมกัน
+it('คำนวณ VAT ได้ถูกต้องสำหรับทุกราคา', function (float $price, float $expectedVat) {
+    $calculator = new TaxCalculator();
+    expect($calculator->calculate($price))->toBe($expectedVat);
+})->with([
+    [100.0, 7.0],
+    [500.0, 35.0],
+    [1000.0, 70.0],
+    [0.0, 0.0],
+]);
+```
+
+---
+
+## Feature Test — HTTP Endpoints
+
+ทดสอบ HTTP request ครบ pipeline ตั้งแต่ route → controller → response:
+
+```php
+// tests/Feature/OrderTest.php
+use App\Models\User;
+use App\Models\Order;
+
+test('ลูกค้าสามารถดูออเดอร์ของตัวเองได้', function () {
+    $user  = User::factory()->create();
+    $order = Order::factory()->for($user, 'customer')->create();
+
+    $response = $this->actingAs($user)
+        ->getJson("/api/orders/{$order->id}");
+
+    $response->assertOk()
+        ->assertJsonPath('data.id', $order->id)
+        ->assertJsonPath('data.order_number', $order->order_number);
+});
+
+test('ลูกค้าไม่สามารถดูออเดอร์ของคนอื่นได้', function () {
+    $owner = User::factory()->create();
+    $other = User::factory()->create();
+    $order = Order::factory()->for($owner, 'customer')->create();
+
+    $this->actingAs($other)
+        ->getJson("/api/orders/{$order->id}")
+        ->assertForbidden();
+});
+
+test('ต้อง login ก่อนดูออเดอร์', function () {
+    $order = Order::factory()->create();
+
+    $this->getJson("/api/orders/{$order->id}")
+        ->assertUnauthorized();
+});
+```
+
+---
+
+## Database Testing
+
+ใช้ `RefreshDatabase` เพื่อ reset database หลังทุก test:
+
+```php
+// tests/Feature/CheckoutTest.php
+use App\Models\User;
+use App\Models\Product;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+
+uses(RefreshDatabase::class);
+
+test('สร้างออเดอร์สำเร็จเมื่อ checkout', function () {
+    $user    = User::factory()->create();
+    $product = Product::factory()->create(['price' => 299, 'stock_quantity' => 10]);
+
+    $response = $this->actingAs($user)->postJson('/api/checkout', [
+        'items' => [
+            ['product_id' => $product->id, 'quantity' => 2],
+        ],
+        'payment_method' => 'promptpay',
+        'shipping_address' => '99 ถนนสุขุมวิท กรุงเทพฯ 10110',
+    ]);
+
+    $response->assertCreated()
+        ->assertJsonStructure([
+            'data' => ['id', 'order_number', 'total_amount', 'status'],
+        ]);
+
+    // ตรวจว่าบันทึก database จริง
+    $this->assertDatabaseHas('orders', [
+        'customer_id'    => $user->id,
+        'total_amount'   => 598,
+        'payment_method' => 'promptpay',
+        'status'         => 'pending_payment',
+    ]);
+
+    // ตรวจว่า stock ถูกตัดแล้ว
+    expect($product->fresh()->stock_quantity)->toBe(8);
+});
+
+test('ไม่สามารถ checkout ถ้าสินค้าหมดสต็อก', function () {
+    $user    = User::factory()->create();
+    $product = Product::factory()->create(['stock_quantity' => 0]);
+
+    $this->actingAs($user)->postJson('/api/checkout', [
+        'items' => [['product_id' => $product->id, 'quantity' => 1]],
+    ])->assertUnprocessable()
+        ->assertJsonValidationErrors(['items.0.quantity']);
+});
+```
+
+---
+
+## Factory
+
+สร้าง test data ด้วย Factory:
+
+```php
+// database/factories/OrderFactory.php
+class OrderFactory extends Factory
+{
+    public function definition(): array
+    {
+        return [
+            'order_number'   => 'TH-' . $this->faker->unique()->numerify('########'),
+            'total_amount'   => $this->faker->numberBetween(100, 10000),
+            'payment_method' => $this->faker->randomElement(['promptpay', 'credit_card', 'cod']),
+            'status'         => 'pending_payment',
+        ];
+    }
+
+    // State: ออเดอร์ที่ชำระแล้ว
+    public function paid(): static
+    {
+        return $this->state([
+            'status'  => 'confirmed',
+            'paid_at' => now(),
+        ]);
+    }
+
+    // State: ออเดอร์ที่ส่งแล้ว
+    public function shipped(): static
+    {
+        return $this->state([
+            'status'           => 'shipped',
+            'paid_at'          => now()->subHours(2),
+            'shipped_at'       => now(),
+            'tracking_number'  => 'TH' . fake()->numerify('##########'),
+        ]);
+    }
+}
+```
+
+```php
+// ใช้ Factory ใน test
+$paidOrder    = Order::factory()->paid()->create();
+$shippedOrder = Order::factory()->shipped()->for($user, 'customer')->create();
+
+// สร้างหลายตัว
+$orders = Order::factory()->count(5)->pending()->create();
+```
+
+---
+
+## Mock Services
+
+ทดสอบโดยไม่ต้องเรียก external API จริง:
+
+```php
+// tests/Feature/PaymentTest.php
+use App\Services\OmiseService;
+
+test('ยืนยัน payment สำเร็จเมื่อ Omise ตอบกลับ success', function () {
+    // Mock OmiseService
+    $mock = $this->mock(OmiseService::class);
+    $mock->shouldReceive('charge')
+        ->once()
+        ->andReturn(new PaymentResult(success: true, reference: 'chrg_test_123'));
+
+    $user  = User::factory()->create();
+    $order = Order::factory()->for($user, 'customer')->create();
+
+    $this->actingAs($user)
+        ->postJson("/api/orders/{$order->id}/pay", [
+            'token' => 'tokn_test_xxx',
+        ])
+        ->assertOk()
+        ->assertJsonPath('data.status', 'confirmed');
+});
+
+test('ออเดอร์ status เป็น payment_failed เมื่อ Omise ปฏิเสธ', function () {
+    $mock = $this->mock(OmiseService::class);
+    $mock->shouldReceive('charge')
+        ->once()
+        ->andReturn(new PaymentResult(success: false, error: 'insufficient_fund'));
+
+    $user  = User::factory()->create();
+    $order = Order::factory()->for($user, 'customer')->create();
+
+    $this->actingAs($user)
+        ->postJson("/api/orders/{$order->id}/pay", ['token' => 'tokn_test_xxx'])
+        ->assertUnprocessable();
+
+    expect($order->fresh()->status)->toBe('payment_failed');
+});
+```
+
+---
+
+## Useful Assertions
+
+```php
+// HTTP Assertions
+$response->assertOk();              // 200
+$response->assertCreated();         // 201
+$response->assertUnprocessable();   // 422
+$response->assertForbidden();       // 403
+$response->assertUnauthorized();    // 401
+$response->assertNotFound();        // 404
+
+// JSON Assertions
+$response->assertJsonPath('data.status', 'confirmed');
+$response->assertJsonStructure(['data' => ['id', 'order_number']]);
+$response->assertJsonCount(5, 'data');
+
+// Database Assertions
+$this->assertDatabaseHas('orders', ['status' => 'confirmed']);
+$this->assertDatabaseMissing('orders', ['id' => $deletedOrder->id]);
+$this->assertSoftDeleted('orders', ['id' => $order->id]);
+
+// Pest expect()
+expect($order->status)->toBe('confirmed');
+expect($orders)->toHaveCount(5);
+expect($amount)->toBeGreaterThan(0);
+expect($email)->toContain('@');
+```
+
+<Callout type="tip">
+รัน `php artisan test --parallel` เพื่อรัน tests พร้อมกันหลาย process ลดเวลาจาก 60 วินาที เหลือ 15 วินาที
+</Callout>

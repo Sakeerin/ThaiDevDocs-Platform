@@ -1,0 +1,338 @@
+---
+title: "PDPA Compliance ใน Laravel — คู่มือปฏิบัติ"
+description: "วิธีทำให้ Laravel application สอดคล้องกับ พ.ร.บ. คุ้มครองข้อมูลส่วนบุคคล (PDPA) ครอบคลุม consent management, data retention, right to erasure และ audit log"
+topic: thai-context
+subtopic: compliance
+tags:
+  - pdpa
+  - privacy
+  - compliance
+  - security
+  - thailand
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-27"
+author: thaidevdocs-team
+contributors: []
+reading_time: 14
+is_premium: false
+---
+
+## PDPA คืออะไร?
+
+**พ.ร.บ. คุ้มครองข้อมูลส่วนบุคคล พ.ศ. 2562 (PDPA)** มีผลบังคับใช้เต็มรูปแบบตั้งแต่ 1 มิถุนายน 2565 ใช้กับธุรกิจที่เก็บหรือใช้ข้อมูลส่วนบุคคลของคนไทย
+
+**ข้อมูลส่วนบุคคลที่ต้องระวัง:**
+- ชื่อ-นามสกุล, อีเมล, เบอร์โทรศัพท์
+- หมายเลขบัตรประชาชน, ที่อยู่
+- ข้อมูลการเงิน, เลขบัญชี
+- พฤติกรรมการใช้งาน (log, cookies)
+- รูปภาพ, เสียง, วิดีโอ
+
+---
+
+## 1. Consent Management — ขอ Consent ก่อนเก็บข้อมูล
+
+### Migration: ตาราง consent
+
+```php
+// database/migrations/..._create_user_consents_table.php
+Schema::create('user_consents', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+    $table->string('purpose');          // 'marketing', 'analytics', 'third_party_sharing'
+    $table->boolean('granted');
+    $table->string('version');          // version ของ privacy policy
+    $table->string('ip_address', 45);
+    $table->text('user_agent')->nullable();
+    $table->timestamp('granted_at')->nullable();
+    $table->timestamp('revoked_at')->nullable();
+    $table->timestamps();
+
+    $table->index(['user_id', 'purpose']);
+});
+```
+
+### Model: UserConsent
+
+```php
+// app/Models/UserConsent.php
+class UserConsent extends Model
+{
+    protected $casts = [
+        'granted_at'  => 'datetime',
+        'revoked_at'  => 'datetime',
+    ];
+
+    public function scopeGranted(Builder $query): void
+    {
+        $query->where('granted', true)->whereNull('revoked_at');
+    }
+
+    public function scopeForPurpose(Builder $query, string $purpose): void
+    {
+        $query->where('purpose', $purpose);
+    }
+}
+```
+
+### Service: ConsentService
+
+```php
+// app/Services/ConsentService.php
+class ConsentService
+{
+    public function grant(User $user, string $purpose, Request $request): UserConsent
+    {
+        return UserConsent::updateOrCreate(
+            ['user_id' => $user->id, 'purpose' => $purpose],
+            [
+                'granted'    => true,
+                'version'    => config('pdpa.privacy_policy_version'),
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'granted_at' => now(),
+                'revoked_at' => null,
+            ]
+        );
+    }
+
+    public function revoke(User $user, string $purpose): void
+    {
+        UserConsent::where('user_id', $user->id)
+            ->where('purpose', $purpose)
+            ->update(['granted' => false, 'revoked_at' => now()]);
+    }
+
+    public function hasConsent(User $user, string $purpose): bool
+    {
+        return UserConsent::where('user_id', $user->id)
+            ->forPurpose($purpose)
+            ->granted()
+            ->exists();
+    }
+
+    public function revokeAll(User $user): void
+    {
+        UserConsent::where('user_id', $user->id)
+            ->update(['granted' => false, 'revoked_at' => now()]);
+    }
+}
+```
+
+### Controller: Consent
+
+```php
+// app/Http/Controllers/ConsentController.php
+class ConsentController extends Controller
+{
+    public function update(Request $request, ConsentService $consent)
+    {
+        $request->validate([
+            'consents'              => 'required|array',
+            'consents.marketing'    => 'boolean',
+            'consents.analytics'    => 'boolean',
+        ]);
+
+        $user = auth()->user();
+
+        foreach ($request->consents as $purpose => $granted) {
+            if ($granted) {
+                $consent->grant($user, $purpose, $request);
+            } else {
+                $consent->revoke($user, $purpose);
+            }
+        }
+
+        return back()->with('success', 'บันทึกการตั้งค่าความเป็นส่วนตัวแล้ว');
+    }
+}
+```
+
+---
+
+## 2. Data Retention — ลบข้อมูลเมื่อครบกำหนด
+
+```php
+// app/Console/Commands/PurgeExpiredPersonalData.php
+class PurgeExpiredPersonalData extends Command
+{
+    protected $signature   = 'pdpa:purge-expired';
+    protected $description = 'ลบข้อมูลส่วนบุคคลที่หมดอายุตาม retention policy';
+
+    public function handle(): void
+    {
+        // ลบ log เก่ากว่า 1 ปี
+        ActivityLog::where('created_at', '<', now()->subYear())->delete();
+
+        // Anonymize user ที่ไม่ได้ใช้งาน 3 ปี
+        User::where('last_active_at', '<', now()->subYears(3))
+            ->where('is_anonymized', false)
+            ->chunkById(100, function ($users) {
+                foreach ($users as $user) {
+                    $this->anonymizeUser($user);
+                }
+            });
+
+        // ลบ session เก่ากว่า 30 วัน
+        DB::table('sessions')
+            ->where('last_activity', '<', now()->subDays(30)->timestamp)
+            ->delete();
+
+        $this->info('ลบข้อมูลที่หมดอายุเรียบร้อยแล้ว');
+    }
+
+    private function anonymizeUser(User $user): void
+    {
+        $user->update([
+            'name'           => 'ผู้ใช้ที่ถูกลบ',
+            'email'          => "deleted_{$user->id}@deleted.invalid",
+            'phone'          => null,
+            'national_id'    => null,
+            'address'        => null,
+            'is_anonymized'  => true,
+            'anonymized_at'  => now(),
+        ]);
+
+        // ลบ consent ทั้งหมด
+        $user->consents()->delete();
+    }
+}
+```
+
+```php
+// Schedule ใน routes/console.php (Laravel 11)
+Schedule::command('pdpa:purge-expired')->daily()->at('02:00');
+```
+
+---
+
+## 3. Right to Erasure — สิทธิ์ขอลบข้อมูล
+
+```php
+// app/Http/Controllers/PrivacyController.php
+class PrivacyController extends Controller
+{
+    public function requestDeletion(Request $request)
+    {
+        $user = auth()->user();
+
+        // สร้าง deletion request
+        $deletionRequest = UserDeletionRequest::create([
+            'user_id'         => $user->id,
+            'reason'          => $request->reason,
+            'requested_at'    => now(),
+            'scheduled_for'   => now()->addDays(30), // ให้เวลา 30 วัน (ตาม PDPA)
+        ]);
+
+        // ส่ง confirmation email
+        Mail::to($user)->send(new DeletionRequestConfirmationMail($deletionRequest));
+
+        // แจ้ง DPO (Data Protection Officer)
+        Notification::route('email', config('pdpa.dpo_email'))
+            ->notify(new NewDeletionRequestNotification($deletionRequest));
+
+        return back()->with('success', 'รับคำขอลบข้อมูลแล้ว เราจะดำเนินการภายใน 30 วัน');
+    }
+
+    public function downloadMyData(User $user)
+    {
+        // สิทธิ์ Data Portability — ส่งข้อมูลทั้งหมดในรูปแบบ JSON
+        $data = [
+            'profile'   => $user->only(['name', 'email', 'phone', 'created_at']),
+            'orders'    => $user->orders->map(fn($o) => [
+                'order_number'   => $o->order_number,
+                'total_amount'   => $o->total_amount,
+                'status'         => $o->status,
+                'created_at'     => $o->created_at->format('Y-m-d'),
+            ]),
+            'consents'  => $user->consents->map(fn($c) => [
+                'purpose'    => $c->purpose,
+                'granted'    => $c->granted,
+                'granted_at' => $c->granted_at?->format('Y-m-d H:i'),
+            ]),
+        ];
+
+        return response()->json($data)
+            ->header('Content-Disposition', 'attachment; filename="my-data.json"');
+    }
+}
+```
+
+---
+
+## 4. Audit Log — บันทึกการเข้าถึงข้อมูล
+
+```php
+// app/Http/Middleware/PersonalDataAccessLog.php
+class PersonalDataAccessLog
+{
+    public function handle(Request $request, Closure $next): Response
+    {
+        $response = $next($request);
+
+        // บันทึกทุกครั้งที่ดูข้อมูลส่วนบุคคล
+        if ($request->routeIs('admin.users.*', 'admin.orders.*')) {
+            PersonalDataAccessLog::create([
+                'accessor_id'     => auth()->id(),
+                'accessor_role'   => auth()->user()->role,
+                'route'           => $request->route()->getName(),
+                'resource_type'   => $this->getResourceType($request),
+                'resource_id'     => $request->route('user')?->id
+                    ?? $request->route('order')?->id,
+                'ip_address'      => $request->ip(),
+                'accessed_at'     => now(),
+            ]);
+        }
+
+        return $response;
+    }
+}
+```
+
+---
+
+## 5. Sensitive Data Encryption
+
+เข้ารหัส sensitive fields อัตโนมัติด้วย Eloquent Encryption:
+
+```php
+// app/Models/User.php
+use Illuminate\Database\Eloquent\Casts\Encrypted;
+
+class User extends Authenticatable
+{
+    protected $casts = [
+        'national_id'     => Encrypted::class,  // เข้ารหัส/ถอดรหัสอัตโนมัติ
+        'bank_account'    => Encrypted::class,
+        'tax_id'          => Encrypted::class,
+    ];
+}
+```
+
+```php
+// ใช้งานได้ปกติ — Laravel encrypt/decrypt ให้อัตโนมัติ
+$user->national_id = '1234567890123'; // เก็บใน DB แบบ encrypted
+echo $user->national_id;              // อ่านออกมาเป็น plain text
+```
+
+<Callout type="warning">
+ต้องตั้งค่า `APP_KEY` ให้ปลอดภัยและ backup ไว้ ถ้าสูหาย จะไม่สามารถถอดรหัส sensitive data ได้อีก
+</Callout>
+
+---
+
+## Checklist PDPA สำหรับ Laravel App
+
+```
+✅ มี Privacy Policy หน้าเว็บ
+✅ ขอ consent ก่อนเก็บข้อมูล marketing
+✅ บันทึก consent พร้อม timestamp, IP, version
+✅ ผู้ใช้สามารถดู/แก้ไข consent ได้
+✅ มี "ขอลบข้อมูล" feature
+✅ ตอบกลับ data erasure request ภายใน 30 วัน
+✅ Encrypt sensitive fields (เลขบัตร, bank account)
+✅ Data retention policy — ลบข้อมูลเมื่อครบกำหนด
+✅ Audit log การเข้าถึงข้อมูลส่วนบุคคล
+✅ แจ้ง data breach ภายใน 72 ชั่วโมง (ถ้าเกิด)
+```

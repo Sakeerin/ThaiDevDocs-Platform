@@ -1,0 +1,258 @@
+---
+title: "Laravel Policies & Gates — Authorization ที่ถูกต้อง"
+description: "เรียนรู้การทำ Authorization ใน Laravel ด้วย Gates และ Policies แยกแยะว่าเมื่อไหร่ใช้อะไร พร้อมตัวอย่างระบบสิทธิ์สำหรับ e-commerce ไทย"
+topic: laravel
+subtopic: auth
+tags:
+  - authorization
+  - policies
+  - gates
+  - security
+  - auth
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-27"
+author: thaidevdocs-team
+contributors: []
+reading_time: 12
+is_premium: false
+---
+
+## Authentication vs Authorization
+
+| | **Authentication** | **Authorization** |
+|---|---|---|
+| คำถาม | "คุณคือใคร?" | "คุณทำอะไรได้บ้าง?" |
+| Laravel | `auth()->check()` | Gates, Policies |
+| ตัวอย่าง | Login ด้วย email/password | แก้ไขได้เฉพาะ article ของตัวเอง |
+
+---
+
+## Gates
+
+**Gate** คือ closure-based authorization — เหมาะกับ rule ง่ายๆ ที่ไม่ผูกกับ Model โดยตรง
+
+### กำหนด Gate
+
+```php
+// app/Providers/AppServiceProvider.php
+use Illuminate\Support\Facades\Gate;
+
+public function boot(): void
+{
+    // Gate ง่ายๆ: เฉพาะ admin เท่านั้น
+    Gate::define('manage-users', function (User $user) {
+        return $user->role === 'admin';
+    });
+
+    // Gate พร้อม model argument
+    Gate::define('edit-article', function (User $user, Article $article) {
+        return $user->id === $article->author_id || $user->role === 'editor';
+    });
+
+    // Gate สำหรับ view analytics (admin หรือ manager)
+    Gate::define('view-analytics', function (User $user) {
+        return in_array($user->role, ['admin', 'manager']);
+    });
+}
+```
+
+### ใช้ Gate
+
+```php
+// ใน Controller
+if (Gate::allows('manage-users')) {
+    // ทำได้
+}
+
+if (Gate::denies('manage-users')) {
+    abort(403, 'ไม่มีสิทธิ์จัดการผู้ใช้');
+}
+
+// authorize() — throw AuthorizationException ถ้าไม่ผ่าน
+Gate::authorize('manage-users');
+
+// ตรวจสิทธิ์พร้อม model
+Gate::authorize('edit-article', $article);
+```
+
+```php
+// ใน Blade template
+@can('manage-users')
+    <a href="/admin/users">จัดการผู้ใช้</a>
+@endcan
+
+@cannot('manage-users')
+    <p>ไม่มีสิทธิ์เข้าถึงส่วนนี้</p>
+@endcannot
+
+@can('edit-article', $article)
+    <button>แก้ไขบทความ</button>
+@endcan
+```
+
+---
+
+## Policies
+
+**Policy** คือ class ที่รวม authorization rules ทั้งหมดของ Model ไว้ที่เดียว — เหมาะกับ authorization ที่ซับซ้อนและ model-specific
+
+### สร้าง Policy
+
+```bash
+php artisan make:policy OrderPolicy --model=Order
+```
+
+```php
+// app/Policies/OrderPolicy.php
+class OrderPolicy
+{
+    // ดูออเดอร์: เจ้าของหรือ admin
+    public function view(User $user, Order $order): bool
+    {
+        return $user->id === $order->customer_id
+            || $user->role === 'admin';
+    }
+
+    // แก้ไขออเดอร์: เฉพาะออเดอร์ที่ยังไม่ได้ชำระเงิน
+    public function update(User $user, Order $order): bool
+    {
+        return $user->id === $order->customer_id
+            && $order->status === 'pending_payment';
+    }
+
+    // ยกเลิกออเดอร์: เจ้าของ (ถ้ายังไม่จัดส่ง) หรือ admin
+    public function cancel(User $user, Order $order): bool
+    {
+        if ($user->role === 'admin') {
+            return true;
+        }
+
+        return $user->id === $order->customer_id
+            && in_array($order->status, ['pending_payment', 'confirmed']);
+    }
+
+    // สร้างออเดอร์ใหม่: user ที่ verify email แล้วเท่านั้น
+    public function create(User $user): bool
+    {
+        return $user->hasVerifiedEmail();
+    }
+
+    // refund: เฉพาะ admin หรือ manager
+    public function refund(User $user, Order $order): bool
+    {
+        return in_array($user->role, ['admin', 'manager'])
+            && $order->status === 'delivered';
+    }
+}
+```
+
+### Register Policy
+
+**Laravel 11:** Policy discovery อัตโนมัติถ้า naming convention ตรง (`Order` → `OrderPolicy`)
+
+ถ้าต้องการ register manual:
+```php
+// app/Providers/AppServiceProvider.php
+use App\Models\Order;
+use App\Policies\OrderPolicy;
+
+public function boot(): void
+{
+    Gate::policy(Order::class, OrderPolicy::class);
+}
+```
+
+### ใช้ Policy ใน Controller
+
+```php
+// app/Http/Controllers/OrderController.php
+class OrderController extends Controller
+{
+    public function show(Order $order)
+    {
+        $this->authorize('view', $order); // throw 403 ถ้าไม่ผ่าน
+        return view('orders.show', compact('order'));
+    }
+
+    public function update(UpdateOrderRequest $request, Order $order)
+    {
+        $this->authorize('update', $order);
+
+        $order->update($request->validated());
+        return back()->with('success', 'บันทึกเรียบร้อย');
+    }
+
+    public function cancel(Order $order)
+    {
+        $this->authorize('cancel', $order);
+
+        $order->update(['status' => 'cancelled']);
+        CancelOrderJob::dispatch($order); // คืน stock, refund, ฯลฯ
+        return back()->with('success', 'ยกเลิกออเดอร์แล้ว');
+    }
+
+    public function store(CreateOrderRequest $request)
+    {
+        $this->authorize('create', Order::class); // ไม่มี instance ใช้ class name
+        // ...
+    }
+}
+```
+
+### ใช้ Policy ใน Blade
+
+```blade
+@can('cancel', $order)
+    <form method="POST" action="{{ route('orders.cancel', $order) }}">
+        @csrf
+        @method('PATCH')
+        <button type="submit" class="btn-danger">ยกเลิกออเดอร์</button>
+    </form>
+@endcan
+
+@can('refund', $order)
+    <button>คืนเงิน</button>
+@endcan
+```
+
+---
+
+## Policy Response — คำตอบแบบละเอียด
+
+แทนที่จะ return `bool` สามารถ return `Response` พร้อม message:
+
+```php
+use Illuminate\Auth\Access\Response;
+
+public function cancel(User $user, Order $order): Response
+{
+    if ($user->role === 'admin') {
+        return Response::allow();
+    }
+
+    if ($user->id !== $order->customer_id) {
+        return Response::deny('คุณไม่ใช่เจ้าของออเดอร์นี้');
+    }
+
+    if (!in_array($order->status, ['pending_payment', 'confirmed'])) {
+        return Response::deny('ไม่สามารถยกเลิกออเดอร์ที่จัดส่งแล้วได้');
+    }
+
+    return Response::allow();
+}
+```
+
+---
+
+## เมื่อไหร่ใช้ Gate vs Policy?
+
+| | **Gate** | **Policy** |
+|---|---|---|
+| เหมาะกับ | Action ทั่วไป, ไม่ผูกกับ Model | CRUD actions บน Model |
+| ตัวอย่าง | `manage-users`, `view-analytics` | `view`, `create`, `update`, `delete` บน `Order` |
+| การ register | `Gate::define()` ใน AppServiceProvider | class แยกต่างหาก |
+
+<Callout type="tip">
+ถ้ามี authorization หลายข้อที่เกี่ยวกับ Model เดียวกัน ใช้ Policy จะเป็นระเบียบกว่า Gate
+</Callout>

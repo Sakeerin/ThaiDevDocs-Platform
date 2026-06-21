@@ -1,0 +1,303 @@
+---
+title: "Thai Date Format ใน Laravel — พ.ศ. และรูปแบบวันที่ไทย"
+description: "วิธีแสดงวันที่แบบไทยใน Laravel ครอบคลุม พ.ศ. vs ค.ศ., ชื่อเดือนภาษาไทย, ชื่อวันภาษาไทย, Carbon extension และการ localize สำหรับ app ไทย"
+topic: thai-context
+subtopic: localization
+tags:
+  - date
+  - thai
+  - buddhist-era
+  - carbon
+  - localization
+  - i18n
+difficulty: beginner
+laravel_version: "11.x"
+verified_at: "2026-04-27"
+author: thaidevdocs-team
+contributors: []
+reading_time: 10
+is_premium: false
+---
+
+## ปัญหาวันที่ในระบบไทย
+
+ไทยใช้ปฏิทิน **พุทธศักราช (พ.ศ.)** ซึ่งเร็วกว่า ค.ศ. อยู่ **543 ปี**
+
+```
+ค.ศ. 2026 = พ.ศ. 2569
+```
+
+ระบบ IT ทั้งหมดใช้ ค.ศ. ภายใน แต่ user ไทยคาดหวังเห็น **พ.ศ.** บนหน้าจอ
+
+---
+
+## Setup Locale
+
+```php
+// config/app.php
+'locale'            => 'th',
+'fallback_locale'   => 'en',
+'faker_locale'      => 'th_TH',
+```
+
+```php
+// app/Providers/AppServiceProvider.php
+use Carbon\Carbon;
+
+public function boot(): void
+{
+    Carbon::setLocale('th');
+    setlocale(LC_TIME, 'th_TH.UTF-8', 'th_TH');
+}
+```
+
+---
+
+## แปลง ค.ศ. เป็น พ.ศ.
+
+### Helper Function
+
+```php
+// app/Helpers/ThaiDateHelper.php
+namespace App\Helpers;
+
+use Carbon\Carbon;
+
+class ThaiDateHelper
+{
+    private static array $monthsTh = [
+        1  => 'มกราคม',
+        2  => 'กุมภาพันธ์',
+        3  => 'มีนาคม',
+        4  => 'เมษายน',
+        5  => 'พฤษภาคม',
+        6  => 'มิถุนายน',
+        7  => 'กรกฎาคม',
+        8  => 'สิงหาคม',
+        9  => 'กันยายน',
+        10 => 'ตุลาคม',
+        11 => 'พฤศจิกายน',
+        12 => 'ธันวาคม',
+    ];
+
+    private static array $monthsShortTh = [
+        1  => 'ม.ค.',
+        2  => 'ก.พ.',
+        3  => 'มี.ค.',
+        4  => 'เม.ย.',
+        5  => 'พ.ค.',
+        6  => 'มิ.ย.',
+        7  => 'ก.ค.',
+        8  => 'ส.ค.',
+        9  => 'ก.ย.',
+        10 => 'ต.ค.',
+        11 => 'พ.ย.',
+        12 => 'ธ.ค.',
+    ];
+
+    private static array $daysTh = [
+        0 => 'อาทิตย์',
+        1 => 'จันทร์',
+        2 => 'อังคาร',
+        3 => 'พุธ',
+        4 => 'พฤหัสบดี',
+        5 => 'ศุกร์',
+        6 => 'เสาร์',
+    ];
+
+    /**
+     * แปลงเป็นรูปแบบไทยสั้น: 27 เม.ย. 2569
+     */
+    public static function shortThai(Carbon $date): string
+    {
+        $buddhistYear = $date->year + 543;
+        $month        = self::$monthsShortTh[$date->month];
+        return "{$date->day} {$month} {$buddhistYear}";
+    }
+
+    /**
+     * แปลงเป็นรูปแบบไทยเต็ม: 27 เมษายน 2569
+     */
+    public static function longThai(Carbon $date): string
+    {
+        $buddhistYear = $date->year + 543;
+        $month        = self::$monthsTh[$date->month];
+        return "{$date->day} {$month} {$buddhistYear}";
+    }
+
+    /**
+     * แปลงเป็นรูปแบบไทยพร้อมวัน: วันอาทิตย์ที่ 27 เมษายน 2569
+     */
+    public static function fullThai(Carbon $date): string
+    {
+        $buddhistYear = $date->year + 543;
+        $month        = self::$monthsTh[$date->month];
+        $day          = self::$daysTh[$date->dayOfWeek];
+        return "วัน{$day}ที่ {$date->day} {$month} {$buddhistYear}";
+    }
+
+    /**
+     * รูปแบบตัวเลขไทย: 27/04/2569
+     */
+    public static function numericThai(Carbon $date): string
+    {
+        $buddhistYear = $date->year + 543;
+        return $date->format('d/m/') . $buddhistYear;
+    }
+
+    /**
+     * รูปแบบสั้นพร้อมเวลา: 27 เม.ย. 2569 10:30 น.
+     */
+    public static function shortThaiWithTime(Carbon $date): string
+    {
+        return self::shortThai($date) . ' ' . $date->format('H:i') . ' น.';
+    }
+}
+```
+
+### ลง register เป็น Global Helper
+
+```php
+// composer.json
+"autoload": {
+    "files": [
+        "app/helpers.php"
+    ]
+}
+```
+
+```php
+// app/helpers.php
+use App\Helpers\ThaiDateHelper;
+use Carbon\Carbon;
+
+function thaiDate(Carbon|string|null $date, string $format = 'short'): string
+{
+    if (!$date) return '-';
+
+    $carbon = $date instanceof Carbon ? $date : Carbon::parse($date);
+
+    return match ($format) {
+        'long'      => ThaiDateHelper::longThai($carbon),
+        'full'      => ThaiDateHelper::fullThai($carbon),
+        'numeric'   => ThaiDateHelper::numericThai($carbon),
+        'datetime'  => ThaiDateHelper::shortThaiWithTime($carbon),
+        default     => ThaiDateHelper::shortThai($carbon),
+    };
+}
+```
+
+```bash
+composer dump-autoload
+```
+
+---
+
+## ใช้งาน
+
+```php
+// ใน Controller หรือ Service
+use Carbon\Carbon;
+
+$order = Order::find(1);
+
+echo thaiDate($order->created_at);                    // 27 เม.ย. 2569
+echo thaiDate($order->created_at, 'long');             // 27 เมษายน 2569
+echo thaiDate($order->created_at, 'full');             // วันอาทิตย์ที่ 27 เมษายน 2569
+echo thaiDate($order->created_at, 'numeric');          // 27/04/2569
+echo thaiDate($order->created_at, 'datetime');         // 27 เม.ย. 2569 10:30 น.
+
+// ใช้โดยตรงกับ Carbon
+$date = Carbon::now();
+echo ThaiDateHelper::shortThai($date);  // 27 เม.ย. 2569
+echo ThaiDateHelper::longThai($date);   // 27 เมษายน 2569
+```
+
+---
+
+## ใช้ใน Blade Template
+
+```blade
+{{-- ใน view --}}
+<p>วันที่สั่งซื้อ: {{ thaiDate($order->created_at) }}</p>
+<p>วันที่ชำระ: {{ thaiDate($order->paid_at, 'datetime') }}</p>
+
+{{-- ใน loop --}}
+@foreach ($orders as $order)
+    <tr>
+        <td>{{ $order->order_number }}</td>
+        <td>{{ thaiDate($order->created_at) }}</td>
+        <td>฿{{ number_format($order->total_amount, 2) }}</td>
+    </tr>
+@endforeach
+```
+
+---
+
+## Eloquent Attribute Casting
+
+เพิ่ม accessor บน Model เพื่อ format อัตโนมัติ:
+
+```php
+// app/Models/Order.php
+use Illuminate\Database\Eloquent\Casts\Attribute;
+
+class Order extends Model
+{
+    protected function createdAtThai(): Attribute
+    {
+        return Attribute::get(
+            fn () => thaiDate($this->created_at)
+        );
+    }
+
+    protected function paidAtThai(): Attribute
+    {
+        return Attribute::get(
+            fn () => $this->paid_at ? thaiDate($this->paid_at, 'datetime') : null
+        );
+    }
+}
+```
+
+```php
+echo $order->created_at_thai; // 27 เม.ย. 2569 (อัตโนมัติ)
+echo $order->paid_at_thai;    // 27 เม.ย. 2569 10:30 น.
+```
+
+---
+
+## แปลงจาก พ.ศ. Input กลับเป็น ค.ศ.
+
+บางฟอร์มให้ user กรอกวันที่เป็น พ.ศ. — ต้องแปลงก่อน save:
+
+```php
+// app/Http/Requests/CreateInvoiceRequest.php
+public function prepareForValidation(): void
+{
+    // รับ input เป็น พ.ศ. แล้วแปลงเป็น ค.ศ. ก่อน validate
+    if ($this->has('invoice_date')) {
+        $parts = explode('/', $this->invoice_date); // 27/04/2569
+        if (count($parts) === 3) {
+            $parts[2] = (int)$parts[2] - 543; // แปลง พ.ศ. → ค.ศ.
+            $this->merge(['invoice_date' => implode('-', array_reverse($parts))]);
+        }
+    }
+}
+```
+
+---
+
+## ตัวอย่างผลลัพธ์
+
+| Carbon (ค.ศ.) | format | ผลลัพธ์ |
+|---|---|---|
+| `2026-04-27` | `short` | 27 เม.ย. 2569 |
+| `2026-04-27` | `long` | 27 เมษายน 2569 |
+| `2026-04-27` | `full` | วันจันทร์ที่ 27 เมษายน 2569 |
+| `2026-04-27` | `numeric` | 27/04/2569 |
+| `2026-04-27 10:30` | `datetime` | 27 เม.ย. 2569 10:30 น. |
+
+<Callout type="tip">
+ระบบ internal ให้เก็บวันที่เป็น ค.ศ. ใน database เสมอ (เป็น standard ของ MySQL/PostgreSQL) แล้วแปลงเป็น พ.ศ. เฉพาะตอนแสดงผลต่อ user เท่านั้น
+</Callout>

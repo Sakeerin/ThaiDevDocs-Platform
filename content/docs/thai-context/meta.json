@@ -1,4 +1,11 @@
 {
   "title": "Thai Context",
-  "pages": ["index"]
+  "pages": [
+    "index",
+    "omise-promptpay",
+    "pdpa",
+    "line-messaging-api",
+    "dbd-api",
+    "thai-date-format"
+  ]
 }

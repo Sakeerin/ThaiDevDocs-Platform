@@ -1,4 +1,16 @@
 {
   "title": "Laravel",
-  "pages": ["index"]
+  "pages": [
+    "index",
+    "eloquent-relationships",
+    "eager-loading",
+    "eloquent-scopes",
+    "query-builder-vs-eloquent",
+    "eloquent-events-observers",
+    "queue-jobs",
+    "service-container",
+    "policies-gates",
+    "api-resources",
+    "testing-pest"
+  ]
 }

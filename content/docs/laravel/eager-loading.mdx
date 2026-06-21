@@ -1,0 +1,185 @@
+---
+title: "Eager Loading & N+1 Query Problem ใน Laravel"
+description: "อธิบาย N+1 query problem คืออะไร วิธีตรวจจับด้วย Laravel Debugbar และแก้ด้วย with(), load(), withCount() พร้อมตัวอย่างจริง"
+topic: laravel
+subtopic: eloquent
+tags:
+  - eloquent
+  - eager-loading
+  - n+1
+  - performance
+  - database
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-27"
+author: thaidevdocs-team
+contributors: []
+reading_time: 12
+is_premium: false
+---
+
+## N+1 Query Problem คืออะไร?
+
+**N+1 Problem** เกิดขึ้นเมื่อ code ของเราส่ง query ไปยัง database ซ้ำๆ ใน loop แทนที่จะดึงข้อมูลทั้งหมดมาพร้อมกันในครั้งเดียว
+
+ผลลัพธ์คือ database query วิ่ง **N+1 ครั้ง** แทนที่จะเป็น **2 ครั้ง**
+
+<Callout type="warning">
+N+1 Problem เป็นหนึ่งในปัญหา performance ที่พบบ่อยที่สุดใน Laravel apps — ถ้าไม่แก้อาจทำให้ page โหลดช้าหลายเท่าตัว
+</Callout>
+
+---
+
+## ตัวอย่างปัญหา N+1
+
+สมมติเรามีระบบ e-commerce ที่แสดงรายการออเดอร์พร้อมชื่อลูกค้า:
+
+```php
+// ❌ ปัญหา: N+1 Query
+$orders = Order::all(); // Query ที่ 1: SELECT * FROM orders
+
+foreach ($orders as $order) {
+    // Query เพิ่มขึ้นทุก iteration!
+    echo $order->customer->name; // SELECT * FROM customers WHERE id = ?
+}
+// ถ้ามี 100 orders → วิ่ง 101 queries!
+```
+
+<Callout type="info">
+ใน context ไทย ถ้าระบบมีออเดอร์ 500 รายการต่อวัน N+1 อาจทำให้ page โหลดช้าจาก 200ms เป็น 5+ วินาที ลูกค้าจะ bounce ออกทันที
+</Callout>
+
+---
+
+## แก้ด้วย Eager Loading — `with()`
+
+`with()` บอก Eloquent ให้ดึง relationship มาพร้อมกันในการ query เดียว
+
+```php
+// ✅ แก้ด้วย with(): ใช้แค่ 2 queries เสมอ
+$orders = Order::with('customer')->get();
+// Query 1: SELECT * FROM orders
+// Query 2: SELECT * FROM customers WHERE id IN (1, 2, 3, ...)
+
+foreach ($orders as $order) {
+    echo $order->customer->name; // ไม่มี query เพิ่ม — ดึงมาแล้ว
+}
+```
+
+### Eager Load หลาย Relationships พร้อมกัน
+
+```php
+$orders = Order::with(['customer', 'items', 'items.product'])->get();
+```
+
+### Eager Load แบบมี Condition
+
+```php
+// โหลดเฉพาะ items ที่ยังไม่ถูก refund
+$orders = Order::with(['items' => function ($query) {
+    $query->where('status', '!=', 'refunded');
+}])->get();
+```
+
+---
+
+## Lazy Eager Loading — `load()`
+
+ใช้เมื่อ fetch model มาแล้ว แต่ยังต้องการ load relationship ภายหลัง:
+
+```php
+$orders = Order::all();
+
+// ต่อมาตัดสินใจว่าต้องการ customer ด้วย
+if ($needsCustomerData) {
+    $orders->load('customer');
+}
+```
+
+---
+
+## `withCount()` — นับ relationships โดยไม่ต้อง load ทั้งหมด
+
+```php
+// ❌ วิธีที่ช้า
+$customers = Customer::all();
+foreach ($customers as $customer) {
+    echo $customer->orders()->count(); // query ทุก iteration
+}
+
+// ✅ วิธีที่ถูก
+$customers = Customer::withCount('orders')->get();
+foreach ($customers as $customer) {
+    echo $customer->orders_count; // ไม่มี query เพิ่ม
+}
+```
+
+---
+
+## ตรวจจับ N+1 ด้วย Laravel Telescope
+
+ติดตั้ง Telescope เพื่อดู queries ทั้งหมด:
+
+```bash
+composer require laravel/telescope --dev
+php artisan telescope:install
+php artisan migrate
+```
+
+จากนั้นเปิด `/telescope/queries` จะเห็น query ซ้ำๆ ได้ทันที
+
+---
+
+## Eager Loading ใน Real World
+
+### ตัวอย่าง: หน้าแสดงรายการสั่งซื้อ
+
+```php
+// app/Http/Controllers/OrderController.php
+
+// ❌ ก่อนแก้
+public function index()
+{
+    $orders = Order::all();
+    return view('orders.index', compact('orders'));
+    // template เรียก $order->customer->name → N+1
+}
+
+// ✅ หลังแก้
+public function index()
+{
+    $orders = Order::with(['customer', 'items.product'])
+        ->latest()
+        ->paginate(20);
+
+    return view('orders.index', compact('orders'));
+}
+```
+
+### ตัวอย่าง: API endpoint
+
+```php
+// ✅ ใน API Resource Controller
+public function index()
+{
+    return Order::with(['customer:id,name,phone', 'items'])
+        ->whereDate('created_at', today())
+        ->get();
+}
+```
+
+<Callout type="tip">
+ใช้ `customer:id,name,phone` แทน `customer` เพื่อ select เฉพาะ columns ที่ต้องการ ลด data transfer และเร็วขึ้น
+</Callout>
+
+---
+
+## สรุป
+
+| เมื่อไหร่ | ใช้อะไร |
+|---|---|
+| ดึงข้อมูลพร้อม query หลัก | `with('relation')` |
+| โหลด relationship ทีหลัง | `load('relation')` |
+| นับจำนวน relationship | `withCount('relation')` |
+| ดึงเฉพาะ columns ที่ต้องการ | `with('relation:id,name')` |
+| มี condition | `with(['relation' => fn($q) => $q->where(...)])` |

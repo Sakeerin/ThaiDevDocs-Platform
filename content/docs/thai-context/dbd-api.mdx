@@ -1,0 +1,374 @@
+---
+title: "DBD API — ค้นหาข้อมูลบริษัทไทยด้วย Laravel"
+description: "วิธีใช้ API กรมพัฒนาธุรกิจการค้า (DBD) เพื่อค้นหาและตรวจสอบข้อมูลนิติบุคคลไทย การลงทะเบียนสมาชิก OPEN API และการ integrate กับ Laravel"
+topic: thai-context
+subtopic: government-api
+tags:
+  - dbd
+  - government-api
+  - business-registration
+  - thailand
+  - juristic-person
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-27"
+author: thaidevdocs-team
+contributors: []
+reading_time: 11
+is_premium: false
+---
+
+## DBD Open API คืออะไร?
+
+**กรมพัฒนาธุรกิจการค้า (DBD)** เปิด API ให้ developer ค้นหาข้อมูลนิติบุคคลจดทะเบียนในประเทศไทย ผ่าน **DBD e-Service OPEN API**
+
+**ข้อมูลที่เข้าถึงได้:**
+- ชื่อบริษัท (ไทย/อังกฤษ)
+- เลขทะเบียนนิติบุคคล 13 หลัก
+- วันที่จดทะเบียน และสถานะ
+- ที่อยู่สำนักงานใหญ่
+- ทุนจดทะเบียน
+- ผู้แทนนิติบุคคล
+
+**Use Cases:**
+- KYC (Know Your Customer) ตรวจสอบบริษัทก่อนทำธุรกิจ
+- ระบบสมัครสมาชิก B2B — กรอก เลขนิติบุคคล แล้วดึงข้อมูลบริษัทอัตโนมัติ
+- ระบบออกใบกำกับภาษี — ตรวจสอบข้อมูลผู้ซื้อ
+
+---
+
+## ลงทะเบียน API Key
+
+1. ไปที่ [DBD e-Service](https://datawarehouse.dbd.go.th)
+2. สมัคร OPEN API account
+3. รับ **API Key** สำหรับ production
+
+<Callout type="info">
+DBD OPEN API มี rate limit สำหรับ free tier การใช้งาน production ควรทำ caching เพื่อลดการเรียก API ซ้ำ
+</Callout>
+
+---
+
+## Config
+
+```php
+// config/services.php
+'dbd' => [
+    'api_key'  => env('DBD_API_KEY'),
+    'base_url' => env('DBD_BASE_URL', 'https://datawarehouse.dbd.go.th/api/juristic'),
+],
+```
+
+```bash
+# .env
+DBD_API_KEY=your_api_key_here
+DBD_BASE_URL=https://datawarehouse.dbd.go.th/api/juristic
+```
+
+---
+
+## Service Class
+
+```php
+// app/Services/DbdApiService.php
+namespace App\Services;
+
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Cache;
+
+class DbdApiService
+{
+    private string $apiKey;
+    private string $baseUrl;
+
+    public function __construct()
+    {
+        $this->apiKey  = config('services.dbd.api_key');
+        $this->baseUrl = config('services.dbd.base_url');
+    }
+
+    /**
+     * ค้นหานิติบุคคลด้วยเลขทะเบียน 13 หลัก
+     */
+    public function findByRegistrationNumber(string $registrationNumber): ?array
+    {
+        // Cache 24 ชั่วโมง — ข้อมูลบริษัทไม่ค่อยเปลี่ยน
+        return Cache::remember(
+            "dbd:juristic:{$registrationNumber}",
+            now()->addHours(24),
+            fn () => $this->fetchByRegistrationNumber($registrationNumber)
+        );
+    }
+
+    private function fetchByRegistrationNumber(string $registrationNumber): ?array
+    {
+        $response = Http::withHeaders([
+            'Authorization' => "Bearer {$this->apiKey}",
+            'Accept'        => 'application/json',
+        ])->get("{$this->baseUrl}/profile", [
+            'juristicId' => $registrationNumber,
+        ]);
+
+        if ($response->failed()) {
+            \Log::warning("DBD API request failed", [
+                'registration_number' => $registrationNumber,
+                'status'              => $response->status(),
+            ]);
+            return null;
+        }
+
+        $data = $response->json();
+
+        if (empty($data['juristicStatusCode'])) {
+            return null;
+        }
+
+        return $this->transformResponse($data);
+    }
+
+    /**
+     * ค้นหานิติบุคคลด้วยชื่อบริษัท
+     */
+    public function searchByName(string $name, int $page = 1): array
+    {
+        $response = Http::withHeaders([
+            'Authorization' => "Bearer {$this->apiKey}",
+        ])->get("{$this->baseUrl}/search", [
+            'juristicName' => $name,
+            'pageNumber'   => $page,
+            'pageSize'     => 10,
+        ]);
+
+        if ($response->failed()) {
+            return ['data' => [], 'total' => 0];
+        }
+
+        $results = $response->json();
+
+        return [
+            'data'  => collect($results['data'] ?? [])
+                ->map(fn($item) => $this->transformResponse($item))
+                ->toArray(),
+            'total' => $results['totalRecord'] ?? 0,
+            'page'  => $page,
+        ];
+    }
+
+    private function transformResponse(array $data): array
+    {
+        return [
+            'registration_number' => $data['juristicId'],
+            'name_th'             => $data['juristicNameTh'],
+            'name_en'             => $data['juristicNameEn'] ?? null,
+            'type'                => $this->getJuristicType($data['juristicType'] ?? ''),
+            'status'              => $this->getStatusLabel($data['juristicStatusCode']),
+            'registered_at'       => $data['registerDate'] ?? null,
+            'registered_capital'  => $data['registeredCapital'] ?? null,
+            'address'             => $this->formatAddress($data),
+            'representative'      => $data['partnerList'][0]['name'] ?? null,
+        ];
+    }
+
+    private function getJuristicType(string $typeCode): string
+    {
+        return match ($typeCode) {
+            'หจก.'   => 'ห้างหุ้นส่วนจำกัด',
+            'บจ.'    => 'บริษัทจำกัด',
+            'บมจ.'   => 'บริษัทมหาชนจำกัด',
+            'สมาคม'  => 'สมาคม',
+            'มูลนิธิ' => 'มูลนิธิ',
+            default  => $typeCode,
+        };
+    }
+
+    private function getStatusLabel(string $code): string
+    {
+        return match ($code) {
+            '01' => 'ยังดำเนินกิจการอยู่',
+            '02' => 'เลิกกิจการ',
+            '03' => 'ร้างกิจการ',
+            '04' => 'ยกเลิกการจดทะเบียน',
+            default => 'ไม่ทราบสถานะ',
+        };
+    }
+
+    private function formatAddress(array $data): string
+    {
+        $parts = array_filter([
+            $data['addressNo']     ?? null,
+            $data['streetName']    ?? null,
+            $data['subdistrictName'] ?? null,
+            $data['districtName']  ?? null,
+            $data['provinceName']  ?? null,
+            $data['zipCode']       ?? null,
+        ]);
+
+        return implode(' ', $parts);
+    }
+}
+```
+
+---
+
+## Controller & Validation
+
+```php
+// app/Http/Controllers/CompanyVerificationController.php
+class CompanyVerificationController extends Controller
+{
+    public function __construct(
+        private readonly DbdApiService $dbd,
+    ) {}
+
+    /**
+     * ค้นหาบริษัทด้วยเลขทะเบียน (สำหรับ auto-fill form)
+     */
+    public function lookup(Request $request)
+    {
+        $request->validate([
+            'registration_number' => ['required', 'digits:13'],
+        ]);
+
+        $company = $this->dbd->findByRegistrationNumber(
+            $request->registration_number
+        );
+
+        if (!$company) {
+            return response()->json([
+                'found' => false,
+                'message' => 'ไม่พบข้อมูลนิติบุคคลนี้ในระบบ DBD',
+            ]);
+        }
+
+        if ($company['status'] !== 'ยังดำเนินกิจการอยู่') {
+            return response()->json([
+                'found'  => true,
+                'valid'  => false,
+                'data'   => $company,
+                'message' => "บริษัทนี้มีสถานะ: {$company['status']}",
+            ]);
+        }
+
+        return response()->json([
+            'found' => true,
+            'valid' => true,
+            'data'  => $company,
+        ]);
+    }
+
+    /**
+     * ค้นหาบริษัทจากชื่อ
+     */
+    public function search(Request $request)
+    {
+        $request->validate([
+            'name' => ['required', 'string', 'min:2'],
+            'page' => ['integer', 'min:1'],
+        ]);
+
+        $results = $this->dbd->searchByName(
+            name: $request->name,
+            page: $request->integer('page', 1),
+        );
+
+        return response()->json($results);
+    }
+}
+```
+
+---
+
+## ใช้ใน Registration Form (JavaScript)
+
+```javascript
+// Auto-fill company info เมื่อกรอกเลขทะเบียนครบ
+document.getElementById('registration_number').addEventListener('input', async function() {
+    const value = this.value.replace(/\D/g, ''); // เฉพาะตัวเลข
+
+    if (value.length !== 13) return;
+
+    const statusEl = document.getElementById('lookup-status');
+    statusEl.textContent = 'กำลังค้นหา...';
+
+    try {
+        const res = await fetch('/api/company/lookup?registration_number=' + value);
+        const data = await res.json();
+
+        if (!data.found) {
+            statusEl.textContent = '❌ ' + data.message;
+            return;
+        }
+
+        if (!data.valid) {
+            statusEl.textContent = '⚠️ ' + data.message;
+            return;
+        }
+
+        // Auto-fill fields
+        document.getElementById('company_name_th').value = data.data.name_th;
+        document.getElementById('company_name_en').value = data.data.name_en ?? '';
+        document.getElementById('company_address').value = data.data.address;
+        document.getElementById('company_type').value    = data.data.type;
+
+        statusEl.textContent = '✅ พบข้อมูลบริษัทแล้ว';
+
+    } catch (err) {
+        statusEl.textContent = 'เกิดข้อผิดพลาด กรุณาลองใหม่';
+    }
+});
+```
+
+---
+
+## Custom Validation Rule
+
+```php
+// app/Rules/ValidThaiJuristicNumber.php
+use App\Services\DbdApiService;
+use Illuminate\Contracts\Validation\Rule;
+
+class ValidThaiJuristicNumber implements Rule
+{
+    private ?array $companyData = null;
+
+    public function __construct(
+        private readonly DbdApiService $dbd,
+    ) {}
+
+    public function passes($attribute, $value): bool
+    {
+        if (!preg_match('/^\d{13}$/', $value)) {
+            return false;
+        }
+
+        $this->companyData = $this->dbd->findByRegistrationNumber($value);
+
+        return $this->companyData !== null
+            && $this->companyData['status'] === 'ยังดำเนินกิจการอยู่';
+    }
+
+    public function message(): string
+    {
+        return 'เลขทะเบียนนิติบุคคลไม่ถูกต้อง หรือบริษัทนี้ไม่ได้ดำเนินกิจการแล้ว';
+    }
+
+    public function getCompanyData(): ?array
+    {
+        return $this->companyData;
+    }
+}
+```
+
+```php
+// ใช้ใน FormRequest
+public function rules(): array
+{
+    return [
+        'registration_number' => ['required', new ValidThaiJuristicNumber(app(DbdApiService::class))],
+    ];
+}
+```
+
+<Callout type="warning">
+DBD API อาจมี downtime หรือ rate limit ควรมี fallback — เช่น ให้ user กรอกข้อมูลบริษัทด้วยตนเองถ้า API ไม่ตอบสนอง และ cache ผลลัพธ์เพื่อลด API calls
+</Callout>

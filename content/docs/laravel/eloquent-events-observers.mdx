@@ -1,0 +1,248 @@
+---
+title: "Eloquent Events & Observers ใน Laravel"
+description: "เรียนรู้การใช้ Eloquent Model Events และ Observers เพื่อ hook เข้า lifecycle ของ Model เช่น creating, updating, deleted พร้อมตัวอย่างจริง"
+topic: laravel
+subtopic: eloquent
+tags:
+  - eloquent
+  - events
+  - observers
+  - lifecycle
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-27"
+author: thaidevdocs-team
+contributors: []
+reading_time: 10
+is_premium: false
+---
+
+## Model Events คืออะไร?
+
+Eloquent ยิง **events** ในทุก lifecycle ของ Model — ตั้งแต่ก่อนสร้างจนถึงหลังลบ ทำให้เราสามารถ hook เข้า lifecycle เหล่านั้นได้โดยไม่ต้องแก้ code ใน controller
+
+---
+
+## Event ทั้งหมดที่มี
+
+| Event | เมื่อไหร่ |
+|---|---|
+| `creating` | ก่อน INSERT |
+| `created` | หลัง INSERT |
+| `updating` | ก่อน UPDATE |
+| `updated` | หลัง UPDATE |
+| `saving` | ก่อน INSERT หรือ UPDATE |
+| `saved` | หลัง INSERT หรือ UPDATE |
+| `deleting` | ก่อน DELETE |
+| `deleted` | หลัง DELETE |
+| `restoring` | ก่อน Soft Restore |
+| `restored` | หลัง Soft Restore |
+
+---
+
+## วิธีที่ 1: ใช้ Events ตรงใน `booted()`
+
+เหมาะสำหรับ logic ง่ายๆ ที่ไม่ซับซ้อน:
+
+```php
+// app/Models/Order.php
+class Order extends Model
+{
+    protected static function booted(): void
+    {
+        // สร้าง order number อัตโนมัติก่อน insert
+        static::creating(function (Order $order) {
+            $order->order_number = 'TH-' . now()->format('Ymd') . '-' . random_int(1000, 9999);
+        });
+
+        // ส่ง notification เมื่อ status เปลี่ยนเป็น shipped
+        static::updated(function (Order $order) {
+            if ($order->wasChanged('status') && $order->status === 'shipped') {
+                $order->customer->notify(new OrderShippedNotification($order));
+            }
+        });
+
+        // log การลบ order
+        static::deleted(function (Order $order) {
+            activity()
+                ->performedOn($order)
+                ->causedBy(auth()->user())
+                ->log("ลบออเดอร์ #{$order->order_number}");
+        });
+    }
+}
+```
+
+---
+
+## วิธีที่ 2: Observer Class (แนะนำสำหรับ logic หลายอย่าง)
+
+เมื่อ Model มี event หลายตัว การใช้ Observer ช่วยให้ code เป็นระเบียบกว่า
+
+### สร้าง Observer
+
+```bash
+php artisan make:observer OrderObserver --model=Order
+```
+
+```php
+// app/Observers/OrderObserver.php
+class OrderObserver
+{
+    public function creating(Order $order): void
+    {
+        // สร้าง order number อัตโนมัติ
+        $order->order_number = 'TH-' . now()->format('Ymd') . '-' . str_pad(
+            Order::whereDate('created_at', today())->count() + 1,
+            4, '0', STR_PAD_LEFT
+        );
+    }
+
+    public function created(Order $order): void
+    {
+        // ส่ง confirmation email
+        Mail::to($order->customer->email)
+            ->send(new OrderConfirmationMail($order));
+
+        // แจ้ง admin ถ้า order มูลค่าสูง
+        if ($order->total_amount >= 10000) {
+            Notification::route('slack', config('services.slack.webhook'))
+                ->notify(new HighValueOrderNotification($order));
+        }
+    }
+
+    public function updating(Order $order): void
+    {
+        // บันทึก status เดิมก่อนเปลี่ยน
+        if ($order->isDirty('status')) {
+            $order->previous_status = $order->getOriginal('status');
+        }
+    }
+
+    public function updated(Order $order): void
+    {
+        // ส่ง notification ตาม status ใหม่
+        match ($order->status) {
+            'confirmed'      => $order->customer->notify(new OrderConfirmedNotification($order)),
+            'shipped'        => $order->customer->notify(new OrderShippedNotification($order)),
+            'delivered'      => $order->customer->notify(new OrderDeliveredNotification($order)),
+            'cancelled'      => $order->customer->notify(new OrderCancelledNotification($order)),
+            default          => null,
+        };
+    }
+
+    public function deleted(Order $order): void
+    {
+        // คืน stock เมื่อ cancel order
+        foreach ($order->items as $item) {
+            $item->product->increment('stock_quantity', $item->quantity);
+        }
+    }
+}
+```
+
+### Register Observer
+
+**Laravel 11:** ลงทะเบียนใน `AppServiceProvider`
+
+```php
+// app/Providers/AppServiceProvider.php
+use App\Models\Order;
+use App\Observers\OrderObserver;
+
+public function boot(): void
+{
+    Order::observe(OrderObserver::class);
+}
+```
+
+---
+
+## `wasChanged()` vs `isDirty()`
+
+สองเมธอดนี้ใช้บ่อยมากใน events:
+
+```php
+$order->updating(function (Order $order) {
+    // isDirty(): เปลี่ยนแปลงแต่ยังไม่ save
+    if ($order->isDirty('status')) {
+        // status กำลังจะเปลี่ยน
+    }
+});
+
+$order->updated(function (Order $order) {
+    // wasChanged(): เพิ่ง save ไปแล้ว
+    if ($order->wasChanged('status')) {
+        // status เพิ่งเปลี่ยน
+        $oldStatus = $order->getOriginal('status'); // ค่าเดิม
+        $newStatus = $order->status;                // ค่าใหม่
+    }
+});
+```
+
+---
+
+## ข้าม Events (Bypass Events)
+
+บางครั้งต้องการ update โดยไม่ต้องการ fire events เช่น ตอน migration data:
+
+```php
+// ข้าม events ทั้งหมดสำหรับ operation นี้
+Order::withoutEvents(function () {
+    Order::where('migrated', false)->update(['migrated' => true]);
+});
+```
+
+---
+
+## ตัวอย่าง Real World: ระบบร้านค้า
+
+```php
+// app/Observers/ProductObserver.php
+class ProductObserver
+{
+    public function creating(Product $product): void
+    {
+        // auto-generate slug จากชื่อสินค้า
+        $product->slug = Str::slug($product->name) . '-' . uniqid();
+    }
+
+    public function updated(Product $product): void
+    {
+        // ถ้าราคาเปลี่ยน ให้ flush cache ของหน้าสินค้า
+        if ($product->wasChanged('price')) {
+            Cache::forget("product:{$product->id}");
+            Cache::forget("product-list");
+        }
+
+        // ถ้าสต็อกหมด ให้ deactivate สินค้า
+        if ($product->wasChanged('stock_quantity') && $product->stock_quantity <= 0) {
+            $product->updateQuietly(['is_active' => false]); // updateQuietly ไม่ fire events
+        }
+    }
+
+    public function deleting(Product $product): void
+    {
+        // ลบรูปภาพทั้งหมดก่อนลบ product
+        $product->images->each(function (Image $image) {
+            Storage::delete($image->path);
+            $image->delete();
+        });
+    }
+}
+```
+
+<Callout type="warning">
+ระวัง **infinite loop** ถ้า event ของ Model A → update Model A อีกครั้ง ใช้ `updateQuietly()` หรือ `saveQuietly()` เพื่อ update โดยไม่ fire events
+</Callout>
+
+---
+
+## สรุป
+
+| วิธี | เหมาะกับ |
+|---|---|
+| `booted()` inline | Event 1-2 ตัว, logic ง่าย |
+| Observer class | Event หลายตัว, logic ซับซ้อน |
+| `withoutEvents()` | Data migration, bulk operations |
+| `updateQuietly()` | Update ใน event โดยไม่ loop |

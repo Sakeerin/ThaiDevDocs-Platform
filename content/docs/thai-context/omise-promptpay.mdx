@@ -1,0 +1,315 @@
+---
+title: "Omise + PromptPay Integration กับ Laravel"
+description: "วิธีรับชำระเงินผ่าน PromptPay ด้วย Omise API ใน Laravel ครบทุกขั้นตอน ตั้งแต่ติดตั้ง SDK สร้าง QR Code รับ webhook จนถึงยืนยัน payment"
+topic: thai-context
+subtopic: payment
+tags:
+  - omise
+  - promptpay
+  - payment
+  - webhook
+  - qr-code
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-27"
+author: thaidevdocs-team
+contributors: []
+reading_time: 15
+is_premium: false
+---
+
+## ภาพรวม PromptPay + Omise
+
+**PromptPay** คือระบบโอนเงินของธนาคารไทยที่ใช้กันแพร่หลายที่สุด **Omise** (Opn Payments) คือ payment gateway ที่ให้บริการ API รับ PromptPay ในไทย
+
+**Flow การชำระเงิน:**
+```
+User กด "ชำระด้วย PromptPay"
+  ↓
+Laravel เรียก Omise API → สร้าง PromptPay Source
+  ↓
+Omise ส่ง QR Code payload กลับมา
+  ↓
+แสดง QR Code ให้ user สแกนด้วยแอป banking
+  ↓
+User สแกนและยืนยัน → Omise ส่ง webhook มายัง Laravel
+  ↓
+Laravel รับ webhook → อัปเดต order status
+```
+
+---
+
+## ติดตั้ง Omise PHP SDK
+
+```bash
+composer require omise/omise-php
+```
+
+```bash
+# .env
+OMISE_PUBLIC_KEY=pkey_test_xxxxxxxxxxxxxxxx
+OMISE_SECRET_KEY=skey_test_xxxxxxxxxxxxxxxx
+OMISE_WEBHOOK_SECRET=whsec_xxxxxxxxxxxxxxxx
+```
+
+---
+
+## Config & Service Provider
+
+```php
+// config/services.php
+'omise' => [
+    'public_key'      => env('OMISE_PUBLIC_KEY'),
+    'secret_key'      => env('OMISE_SECRET_KEY'),
+    'webhook_secret'  => env('OMISE_WEBHOOK_SECRET'),
+    'api_version'     => '2019-05-29',
+],
+```
+
+```php
+// app/Services/OmiseService.php
+namespace App\Services;
+
+use OmiseCharge;
+use OmiseSource;
+
+class OmiseService
+{
+    public function __construct()
+    {
+        \OmiseApiContext::setSecretKey(config('services.omise.secret_key'));
+        \OmiseApiContext::setPublicKey(config('services.omise.public_key'));
+    }
+
+    /**
+     * สร้าง PromptPay source และ charge
+     * Returns QR code payload string
+     */
+    public function createPromptPayCharge(int $amountSatang, string $orderRef): array
+    {
+        // Step 1: สร้าง PromptPay Source
+        $source = OmiseSource::create([
+            'type'   => 'promptpay',
+            'amount' => $amountSatang,    // หน่วยเป็น สตางค์
+            'currency' => 'THB',
+        ]);
+
+        // Step 2: สร้าง Charge จาก Source
+        $charge = OmiseCharge::create([
+            'amount'      => $amountSatang,
+            'currency'    => 'THB',
+            'source'      => $source['id'],
+            'description' => "ออเดอร์ #{$orderRef}",
+            'metadata'    => ['order_ref' => $orderRef],
+            'return_uri'  => route('checkout.return'),
+        ]);
+
+        return [
+            'charge_id'   => $charge['id'],
+            'qr_code'     => $source['scannable_code']['image']['download_uri'],
+            'expires_at'  => $charge['expires_at'],
+            'amount'      => $amountSatang / 100, // แปลงกลับเป็น บาท
+        ];
+    }
+
+    /**
+     * ตรวจสอบสถานะ charge
+     */
+    public function getChargeStatus(string $chargeId): string
+    {
+        $charge = OmiseCharge::retrieve($chargeId);
+        return $charge['status']; // pending, successful, failed, expired
+    }
+}
+```
+
+---
+
+## Controller: สร้าง PromptPay Payment
+
+```php
+// app/Http/Controllers/PaymentController.php
+class PaymentController extends Controller
+{
+    public function __construct(
+        private readonly OmiseService $omise,
+    ) {}
+
+    public function createPromptPay(Request $request, Order $order)
+    {
+        $this->authorize('pay', $order);
+
+        // แปลงบาทเป็นสตางค์ (Omise ใช้ smallest unit)
+        $amountSatang = (int) ($order->total_amount * 100);
+
+        $payment = $this->omise->createPromptPayCharge(
+            amountSatang: $amountSatang,
+            orderRef:     $order->order_number,
+        );
+
+        // บันทึก charge_id ไว้ match กับ webhook
+        $order->update([
+            'payment_ref'    => $payment['charge_id'],
+            'payment_status' => 'pending',
+        ]);
+
+        return response()->json([
+            'qr_code_url'  => $payment['qr_code'],
+            'expires_at'   => $payment['expires_at'],
+            'amount'       => $order->total_amount,
+            'charge_id'    => $payment['charge_id'],
+        ]);
+    }
+}
+```
+
+---
+
+## รับ Webhook จาก Omise
+
+<Callout type="warning">
+Webhook endpoint ต้องยกเว้น CSRF middleware ใน Laravel — Omise ไม่ส่ง CSRF token
+</Callout>
+
+```php
+// app/Http/Middleware/VerifyCsrfToken.php
+protected $except = [
+    'webhooks/omise',
+];
+```
+
+```php
+// app/Http/Controllers/WebhookController.php
+class WebhookController extends Controller
+{
+    public function omise(Request $request)
+    {
+        // ตรวจสอบ webhook signature
+        if (!$this->verifyOmiseWebhook($request)) {
+            return response('Unauthorized', 401);
+        }
+
+        $event = $request->input('key');
+        $data  = $request->input('data');
+
+        match ($event) {
+            'charge.complete'   => $this->handleChargeComplete($data),
+            'charge.create'     => null, // ไม่ต้องทำอะไร
+            default             => null,
+        };
+
+        return response('OK', 200);
+    }
+
+    private function handleChargeComplete(array $charge): void
+    {
+        $order = Order::where('payment_ref', $charge['id'])->firstOrFail();
+
+        if ($charge['status'] === 'successful') {
+            $order->update([
+                'status'         => 'confirmed',
+                'paid_at'        => now(),
+                'payment_status' => 'paid',
+            ]);
+
+            // ส่ง confirmation
+            SendOrderConfirmationEmail::dispatch($order);
+            NotifyWarehouseJob::dispatch($order);
+
+        } elseif ($charge['status'] === 'failed') {
+            $order->update([
+                'status'         => 'payment_failed',
+                'payment_status' => 'failed',
+            ]);
+        } elseif ($charge['status'] === 'expired') {
+            $order->update([
+                'status'         => 'payment_expired',
+                'payment_status' => 'expired',
+            ]);
+        }
+    }
+
+    private function verifyOmiseWebhook(Request $request): bool
+    {
+        $signature = $request->header('OmiseHeaderWebhookSignature');
+        $secret    = config('services.omise.webhook_secret');
+        $payload   = $request->getContent();
+
+        $expected = hash_hmac('sha256', $payload, $secret);
+
+        return hash_equals($expected, $signature ?? '');
+    }
+}
+```
+
+```php
+// routes/web.php
+Route::post('webhooks/omise', [WebhookController::class, 'omise'])
+    ->name('webhooks.omise');
+```
+
+---
+
+## Frontend: แสดง QR Code
+
+```html
+<!-- Blade template -->
+<div id="qr-container" class="text-center">
+    <img id="qr-image" src="" alt="PromptPay QR Code" class="mx-auto w-64 h-64">
+    <p class="mt-2 text-sm text-gray-600">สแกน QR Code ด้วยแอปธนาคารของคุณ</p>
+    <p class="mt-1 font-bold text-lg">฿<span id="amount"></span></p>
+    <p class="mt-1 text-sm text-red-500">หมดอายุใน: <span id="countdown"></span></p>
+</div>
+
+<script>
+// เรียก API สร้าง QR Code
+async function createPromptPayQR(orderId) {
+    const res = await fetch(`/orders/${orderId}/promptpay`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+        },
+    });
+
+    const data = await res.json();
+
+    document.getElementById('qr-image').src = data.qr_code_url;
+    document.getElementById('amount').textContent = data.amount.toLocaleString('th-TH');
+
+    // countdown timer
+    startCountdown(new Date(data.expires_at));
+
+    // polling ตรวจสถานะทุก 5 วินาที
+    pollPaymentStatus(data.charge_id);
+}
+
+async function pollPaymentStatus(chargeId) {
+    const interval = setInterval(async () => {
+        const res = await fetch(`/payment/status/${chargeId}`);
+        const data = await res.json();
+
+        if (data.status === 'successful') {
+            clearInterval(interval);
+            window.location.href = '/orders/success';
+        } else if (['failed', 'expired'].includes(data.status)) {
+            clearInterval(interval);
+            alert('การชำระเงินไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+        }
+    }, 5000);
+}
+</script>
+```
+
+---
+
+## ทดสอบใน Development
+
+Omise มี Test Mode ใช้ test keys:
+- `pkey_test_...` และ `skey_test_...`
+- สแกน QR Code test ได้ด้วย Omise Dashboard
+- Webhook ทดสอบผ่าน Omise Dashboard → Events → Resend
+
+<Callout type="tip">
+ใช้ [ngrok](https://ngrok.com) หรือ Laravel Herd เพื่อ expose localhost ให้ Omise ส่ง webhook มาได้ตอน development
+</Callout>

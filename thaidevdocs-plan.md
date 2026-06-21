@@ -651,27 +651,27 @@ export function Comments({ slug }: { slug: string }) {
 #### สัปดาห์ 2 — Seed Content (15 Articles)
 
 **วันที่ 6–7: Laravel Eloquent (5 articles)**
-- [ ] Eloquent Relationships ครบทุก type (hasOne, hasMany, belongsTo, belongsToMany, morphTo)
-- [ ] Eager Loading กับ N+1 Query Problem
-- [ ] Eloquent Scopes (local + global)
-- [ ] Query Builder vs Eloquent — เมื่อไหร่ใช้อะไร
-- [ ] Eloquent Events & Observers
+- [x] Eloquent Relationships ครบทุก type (hasOne, hasMany, belongsTo, belongsToMany, morphTo)
+- [x] Eager Loading กับ N+1 Query Problem
+- [x] Eloquent Scopes (local + global)
+- [x] Query Builder vs Eloquent — เมื่อไหร่ใช้อะไร
+- [x] Eloquent Events & Observers
 
 **วันที่ 8–9: Laravel Intermediate (5 articles)**
-- [ ] Queue & Jobs — ทำงานเป็น background
-- [ ] Laravel Service Container & Dependency Injection
-- [ ] Laravel Policies & Gates — Authorization
-- [ ] API Resources — transform data ก่อนส่ง
-- [ ] Laravel Testing ด้วย Pest
+- [x] Queue & Jobs — ทำงานเป็น background
+- [x] Laravel Service Container & Dependency Injection
+- [x] Laravel Policies & Gates — Authorization
+- [x] API Resources — transform data ก่อนส่ง
+- [x] Laravel Testing ด้วย Pest
 
 **วันที่ 10: Thai Context (5 articles)**
-- [ ] Omise + PromptPay integration กับ Laravel
-- [ ] PDPA compliance ใน Laravel project
-- [ ] LINE Messaging API integration
-- [ ] DBD API — ค้นหาข้อมูลบริษัทไทย
-- [ ] Thai date format ใน Laravel (Buddhist era)
+- [x] Omise + PromptPay integration กับ Laravel
+- [x] PDPA compliance ใน Laravel project
+- [x] LINE Messaging API integration
+- [x] DBD API — ค้นหาข้อมูลบริษัทไทย
+- [x] Thai date format ใน Laravel (Buddhist era)
 
-**Deliverable สัปดาห์ 2:** 15 articles พร้อม, site ดูสมบูรณ์พอ soft launch
+**Deliverable สัปดาห์ 2:** ✅ 15 articles พร้อม, site ดูสมบูรณ์พอ soft launch
 
 ---
 
@@ -908,23 +908,23 @@ Thai Context เพิ่มเติม (7 articles):
 ### Phase 1: Seed Content (Launch — 15 articles)
 
 **Laravel Core**
-- [ ] Eloquent Relationships ครบทุก type
-- [ ] Eager Loading & N+1 Query Problem
-- [ ] Eloquent Scopes (local + global)
-- [ ] Query Builder vs Eloquent
-- [ ] Eloquent Events & Observers
-- [ ] Queue & Jobs
-- [ ] Service Container & DI
-- [ ] Policies & Gates
-- [ ] API Resources
-- [ ] Testing ด้วย Pest
+- [x] Eloquent Relationships ครบทุก type
+- [x] Eager Loading & N+1 Query Problem
+- [x] Eloquent Scopes (local + global)
+- [x] Query Builder vs Eloquent
+- [x] Eloquent Events & Observers
+- [x] Queue & Jobs
+- [x] Service Container & DI
+- [x] Policies & Gates
+- [x] API Resources
+- [x] Testing ด้วย Pest
 
 **Thai Context**
-- [ ] Omise + PromptPay ใน Laravel
-- [ ] PDPA compliance
-- [ ] LINE Messaging API
-- [ ] DBD API
-- [ ] Thai date format (Buddhist era)
+- [x] Omise + PromptPay ใน Laravel
+- [x] PDPA compliance
+- [x] LINE Messaging API
+- [x] DBD API
+- [x] Thai date format (Buddhist era)
 
 ### Phase 2: V1.0 (เดือน 1–2 — เพิ่มเป็น 50 articles)
 

@@ -1,0 +1,272 @@
+---
+title: "Eloquent Relationships ภาษาไทย — คู่มือฉบับสมบูรณ์"
+description: "อธิบาย hasOne, hasMany, belongsTo, belongsToMany และ morphTo พร้อมตัวอย่างจริงใน context ไทย เช่น ออเดอร์, ลูกค้า, สินค้า"
+topic: laravel
+subtopic: eloquent
+tags:
+  - eloquent
+  - relationships
+  - orm
+  - database
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-27"
+author: thaidevdocs-team
+contributors: []
+reading_time: 15
+is_premium: false
+---
+
+## Eloquent Relationships คืออะไร?
+
+ใน Laravel, **Eloquent Relationships** คือวิธีที่เราบอก Eloquent ว่า Model แต่ละตัวสัมพันธ์กันอย่างไร เช่น ลูกค้าคนหนึ่งมีออเดอร์ได้หลายรายการ หรือสินค้าหนึ่งชิ้นอยู่ในหลาย category
+
+Eloquent ช่วยให้เราเข้าถึงข้อมูลที่สัมพันธ์กันได้ง่ายโดยไม่ต้องเขียน SQL JOIN เอง
+
+---
+
+## 1. hasOne — ความสัมพันธ์แบบ 1 ต่อ 1
+
+ใช้เมื่อ Model หนึ่งมีอีก Model หนึ่งได้เพียงตัวเดียว
+
+**ตัวอย่าง:** ลูกค้า 1 คน มีโปรไฟล์ 1 อัน
+
+```php
+// app/Models/Customer.php
+class Customer extends Model
+{
+    public function profile(): HasOne
+    {
+        return $this->hasOne(CustomerProfile::class);
+    }
+}
+```
+
+```php
+// การใช้งาน
+$customer = Customer::find(1);
+echo $customer->profile->address; // บ้านเลขที่ 99 ถนนสุขุมวิท กรุงเทพฯ
+```
+
+<Callout type="info">
+`hasOne` ต้องการ foreign key ใน table ที่ถูก reference — ในกรณีนี้ `customer_profiles` ต้องมี column `customer_id`
+</Callout>
+
+---
+
+## 2. hasMany — ความสัมพันธ์แบบ 1 ต่อ หลาย
+
+ใช้เมื่อ Model หนึ่งมีอีก Model ได้หลายตัว
+
+**ตัวอย่าง:** ลูกค้า 1 คน มีออเดอร์ได้หลายรายการ
+
+```php
+// app/Models/Customer.php
+class Customer extends Model
+{
+    public function orders(): HasMany
+    {
+        return $this->hasMany(Order::class);
+    }
+}
+```
+
+```php
+// การใช้งาน
+$customer = Customer::find(1); // สมชาย ใจดี
+
+foreach ($customer->orders as $order) {
+    echo $order->total_amount; // ฿1,250, ฿3,800, ...
+}
+
+// หรือนับจำนวนออเดอร์
+echo $customer->orders()->count(); // 15
+```
+
+---
+
+## 3. belongsTo — ความสัมพันธ์แบบ เป็นของ
+
+ใช้ฝั่งตรงข้ามกับ `hasOne` หรือ `hasMany` — บอกว่า Model นี้เป็นของ Model ไหน
+
+**ตัวอย่าง:** ออเดอร์แต่ละรายการเป็นของลูกค้าคนหนึ่ง
+
+```php
+// app/Models/Order.php
+class Order extends Model
+{
+    public function customer(): BelongsTo
+    {
+        return $this->belongsTo(Customer::class);
+    }
+}
+```
+
+```php
+// การใช้งาน
+$order = Order::find(100);
+echo $order->customer->name;  // สมชาย ใจดี
+echo $order->customer->phone; // 089-123-4567
+```
+
+---
+
+## 4. belongsToMany — ความสัมพันธ์แบบ หลาย ต่อ หลาย
+
+ใช้เมื่อทั้งสอง Model สัมพันธ์กันแบบ many-to-many ต้องมี **pivot table** กลาง
+
+**ตัวอย่าง:** สินค้า 1 ชิ้นอยู่ได้หลาย category และ 1 category มีสินค้าได้หลายชิ้น
+
+```php
+// database/migrations/..._create_category_product_table.php
+Schema::create('category_product', function (Blueprint $table) {
+    $table->foreignId('category_id')->constrained();
+    $table->foreignId('product_id')->constrained();
+    $table->primary(['category_id', 'product_id']);
+});
+```
+
+```php
+// app/Models/Product.php
+class Product extends Model
+{
+    public function categories(): BelongsToMany
+    {
+        return $this->belongsToMany(Category::class);
+    }
+}
+
+// app/Models/Category.php
+class Category extends Model
+{
+    public function products(): BelongsToMany
+    {
+        return $this->belongsToMany(Product::class);
+    }
+}
+```
+
+```php
+// การใช้งาน
+$product = Product::find(1); // เสื้อยืดสีขาว
+
+// ดู categories ทั้งหมดของสินค้า
+foreach ($product->categories as $category) {
+    echo $category->name; // เสื้อผ้า, สินค้าลดราคา
+}
+
+// เพิ่ม category ให้สินค้า
+$product->categories()->attach($categoryId);
+
+// ลบ category ออก
+$product->categories()->detach($categoryId);
+
+// sync — เปลี่ยน categories ทั้งหมดพร้อมกัน
+$product->categories()->sync([1, 3, 5]);
+```
+
+### Pivot Table พร้อม Extra Columns
+
+ถ้า pivot table มีข้อมูลเพิ่มเติม เช่น `price` หรือ `quantity`:
+
+```php
+// app/Models/Order.php
+class Order extends Model
+{
+    public function products(): BelongsToMany
+    {
+        return $this->belongsToMany(Product::class)
+            ->withPivot('quantity', 'unit_price')
+            ->withTimestamps();
+    }
+}
+```
+
+```php
+$order = Order::find(1);
+foreach ($order->products as $product) {
+    echo $product->name;              // เสื้อยืดสีขาว
+    echo $product->pivot->quantity;   // 3
+    echo $product->pivot->unit_price; // 299
+}
+```
+
+---
+
+## 5. morphTo / morphMany — Polymorphic Relationships
+
+ใช้เมื่อ Model หนึ่งสัมพันธ์กับ Model หลายประเภทที่แตกต่างกัน
+
+**ตัวอย่าง:** รูปภาพ (Image) สามารถเป็นของทั้ง `Product` และ `Customer` โดยไม่ต้องมีตาราง image แยกกัน
+
+```php
+// database/migrations/..._create_images_table.php
+Schema::create('images', function (Blueprint $table) {
+    $table->id();
+    $table->string('url');
+    $table->morphs('imageable'); // สร้าง imageable_id และ imageable_type อัตโนมัติ
+    $table->timestamps();
+});
+```
+
+```php
+// app/Models/Image.php
+class Image extends Model
+{
+    public function imageable(): MorphTo
+    {
+        return $this->morphTo();
+    }
+}
+
+// app/Models/Product.php
+class Product extends Model
+{
+    public function images(): MorphMany
+    {
+        return $this->morphMany(Image::class, 'imageable');
+    }
+}
+
+// app/Models/Customer.php
+class Customer extends Model
+{
+    public function avatar(): MorphOne
+    {
+        return $this->morphOne(Image::class, 'imageable');
+    }
+}
+```
+
+```php
+// การใช้งาน
+$product = Product::find(1);
+foreach ($product->images as $image) {
+    echo $image->url; // https://cdn.example.com/product-1.jpg
+}
+
+$customer = Customer::find(1);
+echo $customer->avatar->url; // https://cdn.example.com/avatar-sompong.jpg
+
+// ย้อนกลับ — จาก image หาเจ้าของ
+$image = Image::find(1);
+echo get_class($image->imageable); // App\Models\Product
+```
+
+---
+
+## สรุป Relationship Types
+
+| Relationship | ใช้เมื่อ | ตัวอย่าง |
+|---|---|---|
+| `hasOne` | 1 ต่อ 1 (ฝั่งเจ้าของ) | Customer → Profile |
+| `hasMany` | 1 ต่อ หลาย (ฝั่งเจ้าของ) | Customer → Orders |
+| `belongsTo` | ฝั่งลูก (มี foreign key) | Order → Customer |
+| `belongsToMany` | หลาย ต่อ หลาย | Product → Categories |
+| `morphOne` | Polymorphic 1 ต่อ 1 | Customer → Avatar |
+| `morphMany` | Polymorphic 1 ต่อ หลาย | Product → Images |
+| `morphTo` | ฝั่งลูก polymorphic | Image → Imageable |
+
+<Callout type="warning">
+อย่าลืมใช้ **Eager Loading** (`with()`) เมื่อต้องการ load relationships ใน loop เพื่อหลีกเลี่ยง N+1 Query Problem ดูบทความ [Eager Loading & N+1 Query Problem](/docs/laravel/eager-loading)
+</Callout>

@@ -1,0 +1,293 @@
+---
+title: "API Resources ใน Laravel — Transform Data ก่อนส่ง"
+description: "เรียนรู้การใช้ Laravel API Resources เพื่อ transform Eloquent Model เป็น JSON response ที่ controlled พร้อม conditional fields, collections และ meta data"
+topic: laravel
+subtopic: api
+tags:
+  - api
+  - resources
+  - json
+  - eloquent
+  - rest-api
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-27"
+author: thaidevdocs-team
+contributors: []
+reading_time: 10
+is_premium: false
+---
+
+## API Resource คืออะไร และทำไมต้องใช้?
+
+เมื่อสร้าง API หากส่ง Model ออกตรงๆ จะมีปัญหา:
+
+```php
+// ❌ ส่ง Model ออกตรงๆ — ปัญหาหลายอย่าง
+return Order::find(1);
+// {
+//   "id": 1,
+//   "customer_id": 5,
+//   "total_amount": 1500,
+//   "payment_method": "promptpay",
+//   "secret_discount_code": "STAFF50",  // ❌ ข้อมูลที่ไม่ควรส่ง
+//   "internal_notes": "...",            // ❌ ข้อมูล internal
+//   "created_at": "2026-04-27T10:00:00" // format ที่ client ต้องการอาจต่างกัน
+// }
+```
+
+**API Resource** คือ transformation layer ที่ควบคุมว่า JSON จะมีหน้าตาอย่างไร:
+
+```php
+// ✅ ผ่าน Resource — ส่งเฉพาะที่ต้องการ ใน format ที่กำหนด
+return new OrderResource(Order::find(1));
+```
+
+---
+
+## สร้าง API Resource
+
+```bash
+php artisan make:resource OrderResource
+```
+
+```php
+// app/Http/Resources/OrderResource.php
+namespace App\Http\Resources;
+
+use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\JsonResource;
+
+class OrderResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'             => $this->id,
+            'order_number'   => $this->order_number,
+            'status'         => $this->status,
+            'status_label'   => $this->getStatusLabel(), // computed field
+            'total_amount'   => $this->total_amount,
+            'formatted_total' => '฿' . number_format($this->total_amount, 2),
+            'payment_method' => $this->payment_method,
+            'created_at'     => $this->created_at->format('d/m/Y H:i'),
+            'customer'       => new CustomerResource($this->whenLoaded('customer')),
+            'items'          => OrderItemResource::collection($this->whenLoaded('items')),
+        ];
+    }
+
+    private function getStatusLabel(): string
+    {
+        return match ($this->status) {
+            'pending_payment' => 'รอชำระเงิน',
+            'confirmed'       => 'ยืนยันแล้ว',
+            'shipped'         => 'จัดส่งแล้ว',
+            'delivered'       => 'ได้รับสินค้าแล้ว',
+            'cancelled'       => 'ยกเลิกแล้ว',
+            default           => $this->status,
+        };
+    }
+}
+```
+
+---
+
+## ใช้ Resource ใน Controller
+
+```php
+// app/Http/Controllers/Api/OrderController.php
+
+// Single resource
+public function show(Order $order)
+{
+    return new OrderResource(
+        $order->load('customer', 'items.product')
+    );
+}
+
+// Collection
+public function index()
+{
+    $orders = Order::with(['customer', 'items'])
+        ->where('customer_id', auth()->id())
+        ->latest()
+        ->paginate(15);
+
+    return OrderResource::collection($orders);
+}
+```
+
+---
+
+## `whenLoaded()` — โหลด relationship แบบ conditional
+
+ป้องกัน N+1 และส่ง relationship เฉพาะตอนที่โหลดมาแล้ว:
+
+```php
+class OrderResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'       => $this->id,
+            // ส่ง customer เฉพาะตอนที่ ->load('customer') มาแล้ว
+            'customer' => new CustomerResource($this->whenLoaded('customer')),
+            // ถ้าไม่ได้โหลด จะไม่มี key 'customer' ใน response เลย
+        ];
+    }
+}
+```
+
+```php
+// โหลด relationship → response มี customer
+return new OrderResource($order->load('customer'));
+
+// ไม่โหลด → response ไม่มี customer key (ไม่ใช่ null)
+return new OrderResource($order);
+```
+
+---
+
+## `when()` — Conditional Fields
+
+ใส่ field เฉพาะตอนที่ condition เป็น true:
+
+```php
+class OrderResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'            => $this->id,
+            'total_amount'  => $this->total_amount,
+
+            // แสดง internal_notes เฉพาะ admin
+            'internal_notes' => $this->when(
+                $request->user()?->isAdmin(),
+                $this->internal_notes
+            ),
+
+            // แสดง payment_ref เฉพาะตอนที่ชำระแล้ว
+            'payment_ref'   => $this->when(
+                $this->status !== 'pending_payment',
+                $this->payment_ref
+            ),
+
+            // แสดง refund_amount เฉพาะตอนที่ถูก refund
+            'refund_amount' => $this->whenNotNull($this->refund_amount),
+        ];
+    }
+}
+```
+
+---
+
+## Resource Collection พร้อม Meta
+
+```bash
+php artisan make:resource OrderCollection
+```
+
+```php
+// app/Http/Resources/OrderCollection.php
+class OrderCollection extends ResourceCollection
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'data' => $this->collection,
+            'meta' => [
+                'total_orders'   => $this->collection->count(),
+                'total_revenue'  => '฿' . number_format(
+                    $this->collection->sum('total_amount'), 2
+                ),
+                'pending_count'  => $this->collection
+                    ->where('status', 'pending_payment')
+                    ->count(),
+            ],
+        ];
+    }
+}
+```
+
+```php
+// ใช้งาน
+return new OrderCollection(Order::where('customer_id', auth()->id())->get());
+```
+
+---
+
+## Nested Resources
+
+```php
+// app/Http/Resources/CustomerResource.php
+class CustomerResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'    => $this->id,
+            'name'  => $this->name,
+            'phone' => $this->phone,
+            'email' => $this->email,
+        ];
+    }
+}
+
+// app/Http/Resources/OrderItemResource.php
+class OrderItemResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'          => $this->id,
+            'product_name' => $this->product->name,
+            'sku'         => $this->product->sku,
+            'quantity'    => $this->quantity,
+            'unit_price'  => $this->unit_price,
+            'subtotal'    => $this->quantity * $this->unit_price,
+            'formatted'   => '฿' . number_format($this->quantity * $this->unit_price, 2),
+        ];
+    }
+}
+```
+
+---
+
+## ตัวอย่าง Response จริง
+
+```json
+{
+    "data": {
+        "id": 100,
+        "order_number": "TH-20260427-0001",
+        "status": "confirmed",
+        "status_label": "ยืนยันแล้ว",
+        "total_amount": 1500,
+        "formatted_total": "฿1,500.00",
+        "payment_method": "promptpay",
+        "created_at": "27/04/2026 10:30",
+        "customer": {
+            "id": 5,
+            "name": "สมชาย ใจดี",
+            "phone": "089-123-4567",
+            "email": "somchai@example.com"
+        },
+        "items": [
+            {
+                "id": 1,
+                "product_name": "เสื้อยืดสีขาว",
+                "sku": "TSH-WHT-M",
+                "quantity": 2,
+                "unit_price": 299,
+                "subtotal": 598,
+                "formatted": "฿598.00"
+            }
+        ]
+    }
+}
+```
+
+<Callout type="tip">
+ใช้ API Resources เสมอในทุก API endpoint — ป้องกันการ expose ข้อมูลที่ไม่ควรส่งออก และทำให้เปลี่ยน response format ได้โดยไม่แก้ controller
+</Callout>

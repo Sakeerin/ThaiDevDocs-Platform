@@ -1,0 +1,351 @@
+---
+title: "LINE Messaging API Integration กับ Laravel"
+description: "วิธีสร้าง LINE Bot ด้วย LINE Messaging API ใน Laravel ครอบคลุม webhook setup, reply message, rich menu, flex message และ LIFF สำหรับธุรกิจไทย"
+topic: thai-context
+subtopic: messaging
+tags:
+  - line
+  - line-bot
+  - webhook
+  - messaging-api
+  - thailand
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-27"
+author: thaidevdocs-team
+contributors: []
+reading_time: 14
+is_premium: false
+---
+
+## ทำไมต้องใช้ LINE Bot?
+
+LINE มีผู้ใช้ในไทยกว่า **53 ล้านคน** — เกือบทุก smartphone ในไทยมี LINE ติดตั้ง การสร้าง LINE Bot ช่วยให้ธุรกิจสามารถ:
+- รับ order และแจ้งสถานะผ่าน LINE
+- ส่ง promotion และข่าวสาร
+- รับชำระเงินผ่าน LINE Pay
+- ตอบคำถามอัตโนมัติด้วย AI
+
+---
+
+## ขั้นตอนเริ่มต้น
+
+### 1. สร้าง LINE Channel
+
+1. ไปที่ [LINE Developers Console](https://developers.line.biz/)
+2. สร้าง Provider และ Messaging API Channel
+3. บันทึก **Channel Access Token** และ **Channel Secret**
+
+### 2. ติดตั้ง SDK
+
+```bash
+composer require linecorp/line-bot-sdk
+```
+
+```bash
+# .env
+LINE_CHANNEL_SECRET=your_channel_secret
+LINE_CHANNEL_ACCESS_TOKEN=your_access_token
+```
+
+---
+
+## Config
+
+```php
+// config/services.php
+'line' => [
+    'channel_secret'       => env('LINE_CHANNEL_SECRET'),
+    'channel_access_token' => env('LINE_CHANNEL_ACCESS_TOKEN'),
+],
+```
+
+---
+
+## Service Class
+
+```php
+// app/Services/LineMessagingService.php
+namespace App\Services;
+
+use LINE\LINEBot;
+use LINE\LINEBot\HTTPClient\CurlHTTPClient;
+use LINE\LINEBot\MessageBuilder\TextMessageBuilder;
+use LINE\LINEBot\MessageBuilder\FlexMessageBuilder;
+use LINE\LINEBot\MessageBuilder\TemplateMessageBuilder;
+
+class LineMessagingService
+{
+    private LINEBot $bot;
+
+    public function __construct()
+    {
+        $httpClient = new CurlHTTPClient(config('services.line.channel_access_token'));
+        $this->bot  = new LINEBot($httpClient, [
+            'channelSecret' => config('services.line.channel_secret'),
+        ]);
+    }
+
+    /**
+     * ส่งข้อความ text ไปยัง userId หนึ่งคน
+     */
+    public function sendText(string $userId, string $message): void
+    {
+        $this->bot->pushMessage($userId, new TextMessageBuilder($message));
+    }
+
+    /**
+     * ส่ง Flex Message (ใช้ JSON template)
+     */
+    public function sendFlex(string $userId, string $altText, array $flexContent): void
+    {
+        $flexBuilder = new FlexMessageBuilder($altText, $flexContent);
+        $this->bot->pushMessage($userId, $flexBuilder);
+    }
+
+    /**
+     * Reply ไปยัง replyToken (จาก webhook event)
+     */
+    public function reply(string $replyToken, string $message): void
+    {
+        $this->bot->replyMessage($replyToken, new TextMessageBuilder($message));
+    }
+
+    /**
+     * Broadcast ไปทุก follower
+     */
+    public function broadcast(string $message): void
+    {
+        $this->bot->broadcast(new TextMessageBuilder($message));
+    }
+
+    /**
+     * ตรวจสอบ signature ของ webhook
+     */
+    public function verifySignature(string $body, string $signature): bool
+    {
+        return $this->bot->validateSignature($body, $signature);
+    }
+}
+```
+
+---
+
+## Webhook Controller
+
+```php
+// app/Http/Controllers/LineBotController.php
+namespace App\Http\Controllers;
+
+use App\Services\LineMessagingService;
+use App\Services\OrderService;
+use Illuminate\Http\Request;
+
+class LineBotController extends Controller
+{
+    public function __construct(
+        private readonly LineMessagingService $line,
+        private readonly OrderService $orders,
+    ) {}
+
+    public function webhook(Request $request)
+    {
+        // ตรวจสอบ signature
+        $signature = $request->header('X-Line-Signature');
+        $body      = $request->getContent();
+
+        if (!$this->line->verifySignature($body, $signature)) {
+            return response('Unauthorized', 401);
+        }
+
+        $events = $request->input('events', []);
+
+        foreach ($events as $event) {
+            $this->handleEvent($event);
+        }
+
+        return response('OK', 200);
+    }
+
+    private function handleEvent(array $event): void
+    {
+        match ($event['type']) {
+            'message' => $this->handleMessage($event),
+            'follow'  => $this->handleFollow($event),
+            'unfollow' => $this->handleUnfollow($event),
+            'postback' => $this->handlePostback($event),
+            default    => null,
+        };
+    }
+
+    private function handleMessage(array $event): void
+    {
+        $replyToken = $event['replyToken'];
+        $userId     = $event['source']['userId'];
+        $message    = $event['message'];
+
+        if ($message['type'] !== 'text') {
+            $this->line->reply($replyToken, 'รองรับเฉพาะข้อความ text ครับ');
+            return;
+        }
+
+        $text = trim($message['text']);
+
+        // ตรวจสอบคำสั่ง
+        match (true) {
+            str_starts_with($text, 'ดูออเดอร์')  => $this->showOrders($replyToken, $userId),
+            $text === 'โปรโมชั่น'                => $this->sendPromotion($replyToken),
+            $text === 'ติดต่อเรา'                 => $this->sendContactInfo($replyToken),
+            default                               => $this->sendDefaultReply($replyToken, $text),
+        };
+    }
+
+    private function handleFollow(array $event): void
+    {
+        $userId = $event['source']['userId'];
+
+        // บันทึก userId ไว้ในระบบ
+        LineUser::updateOrCreate(
+            ['line_user_id' => $userId],
+            ['followed_at' => now()]
+        );
+
+        $this->line->sendText($userId,
+            "ยินดีต้อนรับสู่ร้านค้าของเรา! 🎉\n\n" .
+            "พิมพ์คำสั่งต่อไปนี้ได้เลย:\n" .
+            "• ดูออเดอร์ — ดูสถานะการสั่งซื้อ\n" .
+            "• โปรโมชั่น — ดูส่วนลดปัจจุบัน\n" .
+            "• ติดต่อเรา — ช่องทางติดต่อ"
+        );
+    }
+
+    private function showOrders(string $replyToken, string $userId): void
+    {
+        $lineUser = LineUser::where('line_user_id', $userId)->first();
+
+        if (!$lineUser?->user_id) {
+            $this->line->reply(
+                $replyToken,
+                "กรุณาผูก LINE กับบัญชีของคุณก่อน\nไปที่: " . route('profile.link-line')
+            );
+            return;
+        }
+
+        $orders = Order::where('customer_id', $lineUser->user_id)
+            ->latest()
+            ->limit(3)
+            ->get();
+
+        if ($orders->isEmpty()) {
+            $this->line->reply($replyToken, 'ยังไม่มีออเดอร์ครับ');
+            return;
+        }
+
+        // ส่งเป็น Flex Message
+        $this->line->sendFlex(
+            $userId,
+            'สถานะออเดอร์ล่าสุด',
+            $this->buildOrdersFlex($orders)
+        );
+    }
+
+    private function buildOrdersFlex($orders): array
+    {
+        $bubbles = $orders->map(fn($order) => [
+            'type' => 'bubble',
+            'body' => [
+                'type'     => 'box',
+                'layout'   => 'vertical',
+                'contents' => [
+                    ['type' => 'text', 'text' => $order->order_number, 'weight' => 'bold', 'size' => 'md'],
+                    ['type' => 'text', 'text' => "สถานะ: {$order->status_label}", 'size' => 'sm', 'color' => '#666666'],
+                    ['type' => 'text', 'text' => "฿" . number_format($order->total_amount), 'size' => 'sm'],
+                ],
+            ],
+        ])->toArray();
+
+        return [
+            'type'     => 'carousel',
+            'contents' => $bubbles,
+        ];
+    }
+}
+```
+
+```php
+// routes/web.php — ยกเว้น CSRF
+Route::post('webhook/line', [LineBotController::class, 'webhook'])
+    ->name('webhook.line')
+    ->withoutMiddleware([\App\Http\Middleware\VerifyCsrfToken::class]);
+```
+
+---
+
+## ส่ง Notification เมื่อ Order เปลี่ยน Status
+
+```php
+// app/Notifications/OrderStatusUpdatedNotification.php
+class OrderStatusUpdatedNotification extends Notification
+{
+    public function __construct(
+        private readonly Order $order,
+    ) {}
+
+    public function via(object $notifiable): array
+    {
+        $channels = ['database'];
+
+        // ส่ง LINE ถ้าผูกบัญชีไว้
+        if ($notifiable->line_user_id) {
+            $channels[] = 'line';
+        }
+
+        return $channels;
+    }
+
+    public function toLine(object $notifiable): string
+    {
+        $statusMessages = [
+            'confirmed' => "✅ ยืนยันออเดอร์แล้ว",
+            'shipped'   => "🚚 จัดส่งแล้ว",
+            'delivered' => "📦 ได้รับสินค้าแล้ว",
+            'cancelled' => "❌ ยกเลิกแล้ว",
+        ];
+
+        $statusText = $statusMessages[$this->order->status] ?? $this->order->status;
+
+        return "ออเดอร์ #{$this->order->order_number}\n" .
+               "{$statusText}\n" .
+               "ยอดรวม: ฿" . number_format($this->order->total_amount);
+    }
+}
+```
+
+### Custom LINE Notification Channel
+
+```php
+// app/Channels/LineChannel.php
+class LineChannel
+{
+    public function __construct(
+        private readonly LineMessagingService $line,
+    ) {}
+
+    public function send(object $notifiable, Notification $notification): void
+    {
+        $message = $notification->toLine($notifiable);
+        $this->line->sendText($notifiable->line_user_id, $message);
+    }
+}
+```
+
+```php
+// app/Providers/AppServiceProvider.php
+Notification::extend('line', fn($app) => new LineChannel(
+    $app->make(LineMessagingService::class)
+));
+```
+
+<Callout type="tip">
+ใช้ ngrok หรือ Expose (`php artisan expose`) เพื่อรับ webhook จาก LINE ตอน development บน localhost
+</Callout>
