@@ -1,4 +1,14 @@
 {
   "title": "AI",
-  "pages": ["index"]
+  "pages": [
+    "index",
+    "claude-api-php",
+    "langgraph-js",
+    "pgvector-postgresql",
+    "rag-pattern",
+    "line-bot-ai",
+    "ai-code-review",
+    "embeddings-semantic-search",
+    "prompt-engineering-laravel"
+  ]
 }

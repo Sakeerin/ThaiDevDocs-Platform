@@ -1,4 +1,16 @@
 {
   "title": "Vue",
-  "pages": ["index"]
+  "pages": [
+    "index",
+    "composition-api",
+    "pinia-state-management",
+    "inertia-laravel",
+    "vue-typescript",
+    "component-patterns",
+    "vue-router-4",
+    "vue-testing-vitest",
+    "vite-laravel-config",
+    "vue-composables",
+    "vue-error-handling"
+  ]
 }

@@ -1,0 +1,211 @@
+---
+title: "pgvector + PostgreSQL สำหรับ Vector Search"
+description: "ติดตั้ง pgvector เก็บ embeddings ใน PostgreSQL และ query similarity search จาก Laravel"
+topic: ai
+subtopic: database
+tags:
+  - pgvector
+  - postgresql
+  - embeddings
+  - vector-search
+  - laravel
+difficulty: advanced
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 14
+is_premium: false
+---
+
+## pgvector คืออะไร?
+
+**pgvector** เป็น PostgreSQL extension สำหรับเก็บและค้นหา vector embeddings — ใช้แทน dedicated vector DB ได้สำหรับ scale ขนาดกลาง
+
+<Callout type="info">
+pgvector เหมาะเมื่อ stack ใช้ PostgreSQL อยู่แล้ว — ไม่ต้องเพิ่ม infrastructure ใหม่
+</Callout>
+
+---
+
+## ติดตั้ง pgvector
+
+```sql
+-- PostgreSQL
+CREATE EXTENSION IF NOT EXISTS vector;
+```
+
+```bash
+# Docker
+docker run -d \
+  --name pgvector \
+  -e POSTGRES_PASSWORD=secret \
+  -p 5432:5432 \
+  pgvector/pgvector:pg16
+```
+
+```bash
+# .env
+DB_CONNECTION=pgsql
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_DATABASE=laravel
+DB_USERNAME=postgres
+DB_PASSWORD=secret
+```
+
+---
+
+## Migration
+
+```php
+// database/migrations/xxxx_create_content_sections_table.php
+use Illuminate\Support\Facades\DB;
+
+public function up(): void
+{
+    DB::statement('CREATE EXTENSION IF NOT EXISTS vector');
+
+    Schema::create('content_sections', function (Blueprint $table) {
+        $table->id();
+        $table->string('source_path');
+        $table->string('title');
+        $table->text('content');
+        $table->timestamps();
+    });
+
+    // vector column แยก — Laravel Schema ไม่รองรับ vector type โดยตรง
+    DB::statement('ALTER TABLE content_sections ADD COLUMN embedding vector(1536)');
+    DB::statement('CREATE INDEX content_sections_embedding_idx ON content_sections USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)');
+}
+```
+
+---
+
+## Model
+
+```php
+// app/Models/ContentSection.php
+class ContentSection extends Model
+{
+    protected $fillable = ['source_path', 'title', 'content', 'embedding'];
+
+    protected $casts = [
+        'embedding' => 'array', // เก็บเป็น JSON array ใน app layer
+    ];
+}
+```
+
+---
+
+## EmbeddingService
+
+```php
+// app/Services/EmbeddingService.php
+class EmbeddingService
+{
+    public function embed(string $text): array
+    {
+        $response = Http::withHeaders([
+            'Authorization' => 'Bearer ' . config('services.openai.api_key'),
+        ])->post('https://api.openai.com/v1/embeddings', [
+            'model' => 'text-embedding-3-small',
+            'input' => $text,
+        ]);
+
+        return $response->json('data.0.embedding');
+    }
+
+    public function storeWithEmbedding(ContentSection $section): void
+    {
+        $embedding = $this->embed($section->content);
+        $vectorStr = '[' . implode(',', $embedding) . ']';
+
+        DB::update(
+            'UPDATE content_sections SET embedding = ?::vector WHERE id = ?',
+            [$vectorStr, $section->id]
+        );
+    }
+}
+```
+
+---
+
+## Similarity Search
+
+```php
+// app/Services/ContentSearchService.php
+class ContentSearchService
+{
+    public function __construct(private EmbeddingService $embedder) {}
+
+    public function search(string $query, int $limit = 5): Collection
+    {
+        $queryVector = $this->embedder->embed($query);
+        $vectorStr = '[' . implode(',', $queryVector) . ']';
+
+        return DB::select("
+            SELECT id, title, content, source_path,
+                   1 - (embedding <=> ?::vector) AS similarity
+            FROM content_sections
+            WHERE embedding IS NOT NULL
+            ORDER BY embedding <=> ?::vector
+            LIMIT ?
+        ", [$vectorStr, $vectorStr, $limit]);
+    }
+}
+```
+
+<Callout type="tip">
+`<=>` คือ cosine distance — ค่าน้อย = คล้ายกันมาก `similarity = 1 - distance`
+</Callout>
+
+---
+
+## Index Types
+
+```sql
+-- IVFFlat — เร็ว approximate (แนะนำ > 1000 rows)
+CREATE INDEX ON content_sections
+USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 100);
+
+-- HNSW — เร็วกว่า IVFFlat แต่ใช้ memory มากกว่า (pgvector 0.5+)
+CREATE INDEX ON content_sections
+USING hnsw (embedding vector_cosine_ops);
+```
+
+---
+
+## Bulk Embed Command
+
+```php
+// app/Console/Commands/EmbedContentCommand.php
+class EmbedContentCommand extends Command
+{
+    protected $signature = 'content:embed {--chunk=500}';
+
+    public function handle(EmbeddingService $embedder): void
+    {
+        ContentSection::whereNull('embedding')
+            ->chunkById(50, function ($sections) use ($embedder) {
+                foreach ($sections as $section) {
+                    $embedder->storeWithEmbedding($section);
+                    $this->info("Embedded: {$section->title}");
+                }
+            });
+    }
+}
+```
+
+---
+
+## สรุป
+
+| Operation | SQL/API |
+|---|---|
+| Enable extension | `CREATE EXTENSION vector` |
+| Store embedding | `UPDATE ... SET embedding = ?::vector` |
+| Search | `ORDER BY embedding <=> ?::vector` |
+| Index | IVFFlat หรือ HNSW |
+| Embed text | OpenAI `text-embedding-3-small` |

@@ -1,0 +1,290 @@
+---
+title: "Vue 3 + TypeScript — Type-safe Development"
+description: "ตั้งค่า TypeScript ใน Vue 3 กำหนด type ให้ props emits composables และ Pinia store พร้อม best practices"
+topic: vue
+subtopic: typescript
+tags:
+  - typescript
+  - vue3
+  - type-safety
+  - props
+  - generics
+difficulty: intermediate
+vue_version: "3.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 12
+is_premium: false
+---
+
+## ทำไมต้อง TypeScript กับ Vue?
+
+TypeScript ช่วย catch bug ตั้งแต่ compile time — props ผิด type, API response ไม่ตรง schema, หรือ typo ใน store จะถูกเตือนก่อน deploy
+
+<Callout type="info">
+Vue 3 เขียนด้วย TypeScript — `<script setup lang="ts">` ได้ full IDE support รวม auto-complete และ type checking
+</Callout>
+
+---
+
+## สร้างโปรเจกต์ Vue + TS
+
+```bash
+npm create vue@latest my-app
+# เลือก TypeScript: Yes
+```
+
+```json
+// tsconfig.app.json
+{
+  "compilerOptions": {
+    "strict": true,
+    "noUnusedLocals": true,
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.vue"]
+}
+```
+
+---
+
+## Typed Props & Emits
+
+```vue
+<script setup lang="ts">
+interface Product {
+  id: number
+  name: string
+  price: number
+  inStock: boolean
+}
+
+// Runtime + compile-time validation
+const props = withDefaults(defineProps<{
+  product: Product
+  showPrice?: boolean
+}>(), {
+  showPrice: true,
+})
+
+const emit = defineEmits<{
+  addToCart: [productId: number]
+  remove: [productId: number]
+}>()
+
+function handleAdd() {
+  emit('addToCart', props.product.id)
+}
+</script>
+```
+
+### Props แบบ Runtime (เมื่อต้อง validation)
+
+```vue
+<script setup lang="ts">
+import type { PropType } from 'vue'
+
+const props = defineProps({
+  status: {
+    type: String as PropType<'pending' | 'paid' | 'cancelled'>,
+    required: true,
+  },
+  items: {
+    type: Array as PropType<OrderItem[]>,
+    default: () => [],
+  },
+})
+</script>
+```
+
+---
+
+## Typed Composables
+
+```typescript
+// composables/useFetch.ts
+import { ref, type Ref } from 'vue'
+
+interface UseFetchReturn<T> {
+  data: Ref<T | null>
+  error: Ref<Error | null>
+  loading: Ref<boolean>
+  execute: () => Promise<void>
+}
+
+export function useFetch<T>(url: string): UseFetchReturn<T> {
+  const data = ref<T | null>(null) as Ref<T | null>
+  const error = ref<Error | null>(null)
+  const loading = ref(false)
+
+  async function execute() {
+    loading.value = true
+    error.value = null
+    try {
+      const response = await fetch(url)
+      data.value = await response.json()
+    } catch (e) {
+      error.value = e instanceof Error ? e : new Error(String(e))
+    } finally {
+      loading.value = false
+    }
+  }
+
+  return { data, error, loading, execute }
+}
+```
+
+```vue
+<script setup lang="ts">
+interface User {
+  id: number
+  name: string
+}
+
+const { data: users, loading, execute } = useFetch<User[]>('/api/users')
+onMounted(() => execute())
+</script>
+```
+
+---
+
+## Typed Pinia Store
+
+```typescript
+// stores/products.ts
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+
+export interface Product {
+  id: number
+  name: string
+  price: number
+}
+
+export const useProductStore = defineStore('products', () => {
+  const products = ref<Product[]>([])
+  const loading = ref(false)
+
+  const expensiveProducts = computed(() =>
+    products.value.filter(p => p.price > 1000)
+  )
+
+  async function fetchProducts(): Promise<void> {
+    loading.value = true
+    const res = await fetch('/api/products')
+    products.value = await res.json()
+    loading.value = false
+  }
+
+  return { products, loading, expensiveProducts, fetchProducts }
+})
+```
+
+---
+
+## Component Instance Types
+
+```vue
+<!-- Parent.vue -->
+<script setup lang="ts">
+import { ref } from 'vue'
+import ChildForm from './ChildForm.vue'
+
+const formRef = ref<InstanceType<typeof ChildForm> | null>(null)
+
+function submit() {
+  formRef.value?.validate()
+  formRef.value?.getValues()
+}
+</script>
+
+<template>
+  <ChildForm ref="formRef" />
+</template>
+```
+
+```vue
+<!-- ChildForm.vue -->
+<script setup lang="ts">
+import { reactive } from 'vue'
+
+const form = reactive({ email: '', password: '' })
+
+function validate(): boolean {
+  return form.email.includes('@')
+}
+
+function getValues() {
+  return { ...form }
+}
+
+defineExpose({ validate, getValues })
+</script>
+```
+
+---
+
+## API Response Types
+
+```typescript
+// types/api.ts
+export interface PaginatedResponse<T> {
+  data: T[]
+  meta: {
+    current_page: number
+    last_page: number
+    total: number
+  }
+}
+
+export interface ApiError {
+  message: string
+  errors?: Record<string, string[]>
+}
+```
+
+```typescript
+// services/orderService.ts
+import type { PaginatedResponse } from '@/types/api'
+
+export async function getOrders(page = 1): Promise<PaginatedResponse<Order>> {
+  const res = await fetch(`/api/orders?page=${page}`)
+  if (!res.ok) throw new Error('Failed to fetch orders')
+  return res.json()
+}
+```
+
+<Callout type="tip">
+ใช้ `vue-tsc --noEmit` ใน CI pipeline เพื่อ type-check ก่อน build — จับ type error ที่ Vite อาจข้ามได้
+</Callout>
+
+---
+
+## Global Component Types
+
+```typescript
+// env.d.ts
+/// <reference types="vite/client" />
+
+declare module '*.vue' {
+  import type { DefineComponent } from 'vue'
+  const component: DefineComponent<{}, {}, any>
+  export default component
+}
+```
+
+---
+
+## สรุป
+
+| Pattern | Syntax |
+|---|---|
+| Props | `defineProps<{ ... }>()` |
+| Emits | `defineEmits<{ event: [arg: Type] }>()` |
+| Composable return | Generic `useFetch<T>()` |
+| Pinia | Interface + typed `ref<T[]>` |
+| Template ref | `InstanceType<typeof Component>` |
+| API types | Shared interfaces ใน `types/` |

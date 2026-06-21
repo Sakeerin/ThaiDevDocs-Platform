@@ -1,0 +1,253 @@
+---
+title: "รูปแบบที่อยู่ไทย — Validation & Formatting"
+description: "Validate format ที่อยู่ไทย จังหวัด อำเภอ ตำบล รหัสไปรษณีย์ และ integration กับ Thailand Post API"
+topic: thai-context
+subtopic: data-format
+tags:
+  - address
+  - thailand
+  - validation
+  - postal-code
+  - formatting
+difficulty: beginner
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 12
+is_premium: false
+---
+
+## โครงสร้างที่อยู่ไทย
+
+ที่อยู่ไทยมาตรฐานประกอบด้วย:
+
+```
+[บ้านเลขที่] [หมู่] [ซอย] [ถนน]
+[ตำบล/แขวง] [อำเภอ/เขต] [จังหวัด] [รหัสไปรษณีย์]
+```
+
+<Callout type="info">
+กรุงเทพใช้ แขวง/เขต ต่างจังหวัดใช้ ตำบล/อำเภอ — รหัสไปรษณีย์ 5 หลัก
+</Callout>
+
+---
+
+## Address Model
+
+```php
+// database/migrations/xxxx_create_addresses_table.php
+Schema::create('addresses', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('user_id')->constrained();
+    $table->string('label')->nullable(); // 'home', 'office'
+    $table->string('recipient_name');
+    $table->string('phone', 10);
+    $table->string('address_line');     // บ้านเลขที่ ซอย ถนน
+    $table->string('subdistrict');      // ตำบล/แขวง
+    $table->string('district');         // อำเภอ/เขต
+    $table->string('province');
+    $table->string('postal_code', 5);
+    $table->boolean('is_default')->default(false);
+    $table->timestamps();
+});
+```
+
+---
+
+## Validation Rules
+
+```php
+// app/Rules/ThaiPostalCode.php
+class ThaiPostalCode implements ValidationRule
+{
+    public function validate(string $attribute, mixed $value, Closure $fail): void
+    {
+        if (!preg_match('/^\d{5}$/', $value)) {
+            $fail('รหัสไปรษณีย์ต้องเป็นตัวเลข 5 หลัก');
+        }
+    }
+}
+
+// app/Http/Requests/StoreAddressRequest.php
+class StoreAddressRequest extends FormRequest
+{
+    public function rules(): array
+    {
+        return [
+            'recipient_name' => 'required|string|max:100',
+            'phone'          => ['required', 'string', new ThaiPhoneNumber],
+            'address_line'   => 'required|string|max:255',
+            'subdistrict'    => 'required|string|max:100',
+            'district'       => 'required|string|max:100',
+            'province'       => 'required|string|max:100',
+            'postal_code'    => ['required', 'string', new ThaiPostalCode],
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'recipient_name.required' => 'กรุณากรอกชื่อผู้รับ',
+            'address_line.required'   => 'กรุณากรอกที่อยู่',
+            'subdistrict.required'  => 'กรุณากรอกตำบล/แขวง',
+            'district.required'       => 'กรุณากรอกอำเภอ/เขต',
+            'province.required'       => 'กรุณาเลือกจังหวัด',
+        ];
+    }
+}
+```
+
+---
+
+## Address Formatter
+
+```php
+// app/Support/ThaiAddressFormatter.php
+class ThaiAddressFormatter
+{
+    public static function format(Address $address): string
+    {
+        $lines = array_filter([
+            $address->address_line,
+            self::formatSubdistrict($address->subdistrict, $address->province),
+            self::formatDistrict($address->district, $address->province),
+            $address->province . ' ' . $address->postal_code,
+        ]);
+
+        return implode("\n", $lines);
+    }
+
+    private static function formatSubdistrict(string $name, string $province): string
+    {
+        $prefix = self::isBangkok($province) ? 'แขวง' : 'ต.';
+        return $prefix . $name;
+    }
+
+    private static function formatDistrict(string $name, string $province): string
+    {
+        $prefix = self::isBangkok($province) ? 'เขต' : 'อ.';
+        return $prefix . $name;
+    }
+
+    private static function isBangkok(string $province): bool
+    {
+        return in_array($province, ['กรุงเทพมหานคร', 'กรุงเทพฯ', 'Bangkok']);
+    }
+
+    public static function toSingleLine(Address $address): string
+    {
+        return str_replace("\n", ' ', self::format($address));
+    }
+}
+```
+
+---
+
+## Province/District Data
+
+```php
+// database/seeders/ThaiAddressSeeder.php
+// ใช้ JSON data จาก github.com/kongvut/thai-province-data
+
+class ThaiAddressSeeder extends Seeder
+{
+    public function run(): void
+    {
+        $provinces = json_decode(
+            file_get_contents(database_path('data/thai_provinces.json')),
+            true
+        );
+
+        foreach ($provinces as $province) {
+            Province::create([
+                'name_th' => $province['name_th'],
+                'name_en' => $province['name_en'],
+            ]);
+
+            foreach ($province['districts'] as $district) {
+                District::create([
+                    'province_id' => $province['id'],
+                    'name_th'     => $district['name_th'],
+                ]);
+
+                foreach ($district['subdistricts'] as $sub) {
+                    Subdistrict::create([
+                        'district_id' => $district['id'],
+                        'name_th'     => $sub['name_th'],
+                        'postal_code' => $sub['postal_code'],
+                    ]);
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+## Cascading Select API
+
+```php
+// routes/api.php
+Route::get('/address/provinces', fn () => Province::select('id', 'name_th')->get());
+
+Route::get('/address/districts/{provinceId}', fn ($provinceId) =>
+    District::where('province_id', $provinceId)->select('id', 'name_th')->get()
+);
+
+Route::get('/address/subdistricts/{districtId}', fn ($districtId) =>
+    Subdistrict::where('district_id', $districtId)
+        ->select('id', 'name_th', 'postal_code')
+        ->get()
+);
+```
+
+```vue
+<script setup lang="ts">
+const form = reactive({
+  province_id: null,
+  district_id: null,
+  subdistrict_id: null,
+  postal_code: '',
+})
+
+watch(() => form.subdistrict_id, async (id) => {
+  if (!id) return
+  const sub = subdistricts.value.find(s => s.id === id)
+  form.postal_code = sub?.postal_code ?? ''
+})
+</script>
+```
+
+<Callout type="tip">
+Auto-fill รหัสไปรษณีย์ เมื่อเลือกตำบล — ลด input error จาก user
+</Callout>
+
+---
+
+## Shipping Label Format
+
+```php
+public function toShippingLabel(Address $address): array
+{
+    return [
+        'recipient' => $address->recipient_name,
+        'phone'     => PhoneNormalizer::normalize($address->phone),
+        'address'   => ThaiAddressFormatter::toSingleLine($address),
+        'postal'    => $address->postal_code,
+    ];
+}
+```
+
+---
+
+## สรุป
+
+| Field | Format |
+|---|---|
+| รหัสไปรษณีย์ | 5 หลัก (`^\d{5}$`) |
+| เบอร์โทร | 10 หลัก 06/08/09 |
+| กรุงเทพ | แขวง/เขต |
+| ต่างจังหวัด | ตำบล/อำเภอ |
+| Cascading select | จังหวัด → อำเภอ → ตำบล → รหัสไปรษณีย์ |

@@ -1,0 +1,246 @@
+---
+title: "Vue Composition API — คู่มือใช้งานจริง"
+description: "เรียนรู้ Vue 3 Composition API ตั้งแต่ ref, reactive, computed, watch จนถึง setup script และ best practices สำหรับโปรเจกต์จริง"
+topic: vue
+subtopic: fundamentals
+tags:
+  - composition-api
+  - vue3
+  - ref
+  - reactive
+  - setup
+difficulty: beginner
+vue_version: "3.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 14
+is_premium: false
+---
+
+## Composition API คืออะไร?
+
+**Composition API** คือวิธีจัดการ logic ใน Vue 3 โดยใช้ functions แทน Options API (`data`, `methods`, `computed`) ทำให้ reuse logic ได้ง่ายและ TypeScript ทำงานได้ดีกว่า
+
+<Callout type="info">
+Composition API ไม่ได้แทนที่ Options API — ทั้งสองใช้ร่วมกันได้ในโปรเจกต์เดียว Vue 3 รองรับทั้งคู่
+</Callout>
+
+---
+
+## ref vs reactive
+
+```vue
+<script setup lang="ts">
+import { ref, reactive } from 'vue'
+
+// ref — ใช้กับ primitive values หรือ object ที่ต้องการ .value
+const count = ref(0)
+const user = ref({ name: 'สมชาย', age: 25 })
+
+// reactive — ใช้กับ object/array โดยตรง ไม่ต้อง .value
+const form = reactive({
+  email: '',
+  password: '',
+  remember: false,
+})
+
+function increment() {
+  count.value++           // ref ต้องใช้ .value ใน script
+  form.email = 'test@mail.com'  // reactive แก้ได้ตรงๆ
+}
+</script>
+
+<template>
+  <p>{{ count }}</p>       <!-- template ไม่ต้อง .value -->
+  <input v-model="form.email" />
+</template>
+```
+
+<Callout type="tip">
+ใช้ `ref` เป็นค่า default — ง่ายกว่าและทำงานได้กับทุก type ใช้ `reactive` เมื่อมี form object ที่แก้หลาย field บ่อยๆ
+</Callout>
+
+---
+
+## computed และ watch
+
+```vue
+<script setup lang="ts">
+import { ref, computed, watch } from 'vue'
+
+const price = ref(1000)
+const quantity = ref(2)
+const discount = ref(0.1)
+
+// computed — derived state อัตโนมัติ
+const subtotal = computed(() => price.value * quantity.value)
+const total = computed(() => subtotal.value * (1 - discount.value))
+
+// watch — side effect เมื่อค่าเปลี่ยน
+watch(quantity, (newQty, oldQty) => {
+  console.log(`จำนวนเปลี่ยนจาก ${oldQty} เป็น ${newQty}`)
+})
+
+// watch หลาย sources
+watch([price, discount], ([p, d]) => {
+  console.log(`ราคา ${p} ส่วนลด ${d * 100}%`)
+})
+</script>
+```
+
+### watchEffect — auto-track dependencies
+
+```vue
+<script setup lang="ts">
+import { ref, watchEffect } from 'vue'
+
+const search = ref('')
+
+watchEffect(() => {
+  // ทุก ref ที่อ่านใน callback จะถูก track อัตโนมัติ
+  if (search.value.length >= 2) {
+    fetchResults(search.value)
+  }
+})
+</script>
+```
+
+---
+
+## Lifecycle Hooks
+
+```vue
+<script setup lang="ts">
+import { onMounted, onUnmounted, onBeforeMount } from 'vue'
+
+onBeforeMount(() => {
+  console.log('ก่อน mount DOM')
+})
+
+onMounted(async () => {
+  // ดึงข้อมูลหลัง component แสดงแล้ว
+  await loadProducts()
+})
+
+onUnmounted(() => {
+  // cleanup — ยกเลิก subscription, timer
+  clearInterval(pollTimer)
+})
+</script>
+```
+
+---
+
+## `<script setup>` — Syntax ที่แนะนำ
+
+```vue
+<script setup lang="ts">
+import { ref } from 'vue'
+import ProductCard from '@/components/ProductCard.vue'
+
+// props & emits — compile-time macros
+const props = defineProps<{
+  categoryId: number
+}>()
+
+const emit = defineEmits<{
+  select: [productId: number]
+}>()
+
+const products = ref<Product[]>([])
+
+// expose ให้ parent เรียกผ่าน ref ได้
+defineExpose({ refresh: loadProducts })
+</script>
+```
+
+---
+
+## Composable Pattern พื้นฐาน
+
+```typescript
+// composables/usePagination.ts
+import { ref, computed } from 'vue'
+
+export function usePagination<T>(items: Ref<T[]>, perPage = 10) {
+  const page = ref(1)
+
+  const totalPages = computed(() =>
+    Math.ceil(items.value.length / perPage)
+  )
+
+  const paginatedItems = computed(() => {
+    const start = (page.value - 1) * perPage
+    return items.value.slice(start, start + perPage)
+  })
+
+  function nextPage() {
+    if (page.value < totalPages.value) page.value++
+  }
+
+  return { page, totalPages, paginatedItems, nextPage }
+}
+```
+
+---
+
+## ตัวอย่างจริง: หน้ารายการสินค้า
+
+```vue
+<script setup lang="ts">
+import { ref, computed, onMounted } from 'vue'
+import { useProductStore } from '@/stores/products'
+
+const store = useProductStore()
+const searchQuery = ref('')
+const sortBy = ref<'price' | 'name'>('name')
+
+const filteredProducts = computed(() => {
+  let items = store.products
+
+  if (searchQuery.value) {
+    const q = searchQuery.value.toLowerCase()
+    items = items.filter(p => p.name.toLowerCase().includes(q))
+  }
+
+  return [...items].sort((a, b) =>
+    sortBy.value === 'price' ? a.price - b.price : a.name.localeCompare(b.name, 'th')
+  )
+})
+
+onMounted(() => store.fetchProducts())
+</script>
+
+<template>
+  <div>
+    <input v-model="searchQuery" placeholder="ค้นหาสินค้า..." />
+    <select v-model="sortBy">
+      <option value="name">ชื่อ</option>
+      <option value="price">ราคา</option>
+    </select>
+    <ProductCard
+      v-for="product in filteredProducts"
+      :key="product.id"
+      :product="product"
+    />
+  </div>
+</template>
+```
+
+<Callout type="warning">
+อย่า destructure `reactive()` object โดยตรง — จะเสีย reactivity ใช้ `toRefs()` หรือ `storeToRefs()` จาก Pinia แทน
+</Callout>
+
+---
+
+## สรุป
+
+| Concept | ใช้เมื่อ |
+|---|---|
+| `ref()` | ค่าเดี่ยว, primitive, หรือ object ทั่วไป |
+| `reactive()` | Form object ที่แก้หลาย field |
+| `computed()` | ค่าที่ derive จาก state อื่น |
+| `watch()` | Side effect เมื่อค่าเปลี่ยน |
+| `<script setup>` | Component syntax มาตรฐาน Vue 3 |
+| Composables | Reuse logic ข้าม components |

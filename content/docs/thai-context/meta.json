@@ -6,6 +6,13 @@
     "pdpa",
     "line-messaging-api",
     "dbd-api",
-    "thai-date-format"
+    "thai-date-format",
+    "scb-easy-payment",
+    "kbank-kplus-api",
+    "truemoney-wallet-api",
+    "ndid-digital-id",
+    "thai-tax-calculation",
+    "thai-phone-otp",
+    "thai-address-format"
   ]
 }

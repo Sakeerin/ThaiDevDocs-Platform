@@ -1,0 +1,243 @@
+---
+title: "SCB Easy Payment API Integration"
+description: "เชื่อมต่อ SCB Easy App Payment API สำหรับรับชำระเงินใน Laravel ครบตั้งแต่ OAuth QR payment และ webhook verification"
+topic: thai-context
+subtopic: payment
+tags:
+  - scb
+  - payment
+  - qr-code
+  - banking
+  - laravel
+difficulty: advanced
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 15
+is_premium: false
+---
+
+## SCB Easy Payment คืออะไร?
+
+**SCB Easy App Payment API** ให้ merchant รับชำระเงินผ่าน SCB Easy App — สร้าง QR Code หรือ deep link ให้ลูกค้าชำระได้ทันที
+
+<Callout type="info">
+SCB Developer Portal ต้อง register merchant และขอ API credentials — sandbox ใช้ทดสอบก่อน production
+</Callout>
+
+---
+
+## Flow การชำระเงิน
+
+```
+Customer เลือก "ชำระด้วย SCB Easy"
+    ↓
+Laravel เรียก SCB API → สร้าง Payment Request
+    ↓
+SCB ส่ง QR Code / Deep Link กลับ
+    ↓
+Customer สแกน QR ใน SCB Easy App
+    ↓
+SCB ส่ง Payment Confirmation webhook
+    ↓
+Laravel อัปเดต order status
+```
+
+---
+
+## Config
+
+```bash
+# .env
+SCB_API_KEY=your-api-key
+SCB_API_SECRET=your-api-secret
+SCB_BILLER_ID=your-biller-id
+SCB_CHANNEL_ID=your-channel-id
+SCB_SANDBOX=true
+```
+
+```php
+// config/services.php
+'scb' => [
+    'api_key'    => env('SCB_API_KEY'),
+    'api_secret' => env('SCB_API_SECRET'),
+    'biller_id'  => env('SCB_BILLER_ID'),
+    'channel_id' => env('SCB_CHANNEL_ID'),
+    'sandbox'    => env('SCB_SANDBOX', true),
+    'base_url'   => env('SCB_SANDBOX', true)
+        ? 'https://api-sandbox.partners.scb/partners/sandbox'
+        : 'https://api.partners.scb/partners/v1',
+],
+```
+
+---
+
+## OAuth Token
+
+```php
+// app/Services/ScbPaymentService.php
+class ScbPaymentService
+{
+    private ?string $accessToken = null;
+
+    public function getAccessToken(): string
+    {
+        if ($this->accessToken) return $this->accessToken;
+
+        $response = Http::withHeaders([
+            'resourceOwnerId' => config('services.scb.api_key'),
+            'requestUId'      => Str::uuid()->toString(),
+            'accept-language' => 'EN',
+        ])->asForm()->post(config('services.scb.base_url') . '/oauth/token', [
+            'applicationKey'    => config('services.scb.api_key'),
+            'applicationSecret' => config('services.scb.api_secret'),
+        ])->throw();
+
+        $this->accessToken = $response->json('data.accessToken');
+        return $this->accessToken;
+    }
+}
+```
+
+---
+
+## สร้าง QR Payment
+
+```php
+public function createQrPayment(Order $order): array
+{
+    $response = Http::withHeaders([
+        'authorization'   => 'Bearer ' . $this->getAccessToken(),
+        'resourceOwnerId' => config('services.scb.api_key'),
+        'requestUId'      => Str::uuid()->toString(),
+        'accept-language' => 'EN',
+        'content-type'    => 'application/json',
+    ])->post(config('services.scb.base_url') . '/payment/qrcode/create', [
+        'qrType' => 'PP',  // PromptPay
+        'ppType' => 'BILLERID',
+        'ppId'   => config('services.scb.biller_id'),
+        'amount' => number_format($order->total, 2, '.', ''),
+        'ref1'   => $order->order_number,
+        'ref2'   => (string) $order->user_id,
+        'ref3'   => 'THAIDEVDOCS',
+    ])->throw();
+
+    $data = $response->json('data');
+
+    Payment::create([
+        'order_id'       => $order->id,
+        'gateway'        => 'scb',
+        'transaction_id' => $data['qrRawData'] ?? null,
+        'amount'         => $order->total,
+        'status'         => 'pending',
+        'metadata'       => $data,
+    ]);
+
+    return [
+        'qr_code'    => $data['qrImage'],
+        'qr_raw'     => $data['qrRawData'],
+        'expires_at' => now()->addMinutes(15),
+    ];
+}
+```
+
+---
+
+## Webhook Handler
+
+```php
+// app/Http/Controllers/ScbWebhookController.php
+class ScbWebhookController extends Controller
+{
+    public function __invoke(Request $request)
+    {
+        $payload = $request->all();
+
+        Log::info('SCB webhook received', $payload);
+
+        $orderNumber = $payload['billPaymentRef1'] ?? null;
+        $amount = $payload['amount'] ?? null;
+        $transactionId = $payload['transactionId'] ?? null;
+
+        $order = Order::where('order_number', $orderNumber)->first();
+
+        if (!$order) {
+            return response()->json(['status' => 'order_not_found'], 404);
+        }
+
+        if ((float) $amount !== (float) $order->total) {
+            Log::warning('SCB amount mismatch', [
+                'expected' => $order->total,
+                'received' => $amount,
+            ]);
+            return response()->json(['status' => 'amount_mismatch'], 400);
+        }
+
+        DB::transaction(function () use ($order, $transactionId, $payload) {
+            $order->update(['status' => 'paid', 'paid_at' => now()]);
+
+            Payment::where('order_id', $order->id)->update([
+                'status'         => 'completed',
+                'transaction_id' => $transactionId,
+                'paid_at'        => now(),
+                'metadata'       => $payload,
+            ]);
+
+            OrderPaid::dispatch($order);
+        });
+
+        return response()->json(['status' => 'success']);
+    }
+}
+```
+
+<Callout type="warning">
+Verify webhook signature และ amount ทุกครั้ง — อย่าอัปเดต order เป็น paid โดยไม่ตรวจสอบ
+</Callout>
+
+---
+
+## Frontend QR Display
+
+```vue
+<script setup lang="ts">
+const props = defineProps<{ orderId: number }>()
+const qrCode = ref<string | null>(null)
+const polling = ref(true)
+
+onMounted(async () => {
+  const { data } = await api.post(`/orders/${props.orderId}/scb-qr`)
+  qrCode.value = data.qr_code
+
+  const interval = setInterval(async () => {
+    const status = await api.get(`/orders/${props.orderId}/payment-status`)
+    if (status.data.paid) {
+      polling.value = false
+      clearInterval(interval)
+      router.push('/orders/success')
+    }
+  }, 3000)
+})
+</script>
+
+<template>
+  <div class="text-center">
+    <img v-if="qrCode" :src="qrCode" alt="SCB QR Code" class="mx-auto w-64" />
+    <p>สแกน QR ด้วย SCB Easy App</p>
+    <p v-if="polling" class="text-gray-500">รอการชำระเงิน...</p>
+  </div>
+</template>
+```
+
+---
+
+## สรุป
+
+| Step | API |
+|---|---|
+| Auth | `POST /oauth/token` |
+| Create QR | `POST /payment/qrcode/create` |
+| Webhook | Payment confirmation callback |
+| Verify | Check amount + order number |
+| Frontend | QR display + status polling |

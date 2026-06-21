@@ -1,0 +1,255 @@
+---
+title: "TrueMoney Wallet API Integration"
+description: "รับชำระเงินผ่าน TrueMoney Wallet ใน Laravel ครบ OAuth payment creation webhook และ refund flow"
+topic: thai-context
+subtopic: payment
+tags:
+  - truemoney
+  - wallet
+  - payment
+  - e-wallet
+  - laravel
+difficulty: advanced
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 14
+is_premium: false
+---
+
+## TrueMoney Wallet Payment
+
+**TrueMoney Wallet** เป็น e-wallet ที่ใช้กันแพร่หลายในไทย — TrueMoney Merchant API ให้รับชำระผ่าน wallet balance หรือ linked bank account
+
+<Callout type="info">
+ต้อง register เป็น TrueMoney Merchant ผ่าน TrueMoney for Business — ได้ sandbox credentials สำหรับ development
+</Callout>
+
+---
+
+## Payment Flow
+
+```
+Customer เลือก "TrueMoney Wallet"
+    ↓
+Laravel สร้าง Payment Order → TrueMoney API
+    ↓
+Redirect ไป TrueMoney payment page / Deep link
+    ↓
+Customer ยืนยันใน TrueMoney App
+    ↓
+TrueMoney ส่ง webhook notification
+    ↓
+Laravel verify + อัปเดต order
+```
+
+---
+
+## Configuration
+
+```bash
+# .env
+TRUEMONEY_MERCHANT_ID=your-merchant-id
+TRUEMONEY_SECRET_KEY=your-secret-key
+TRUEMONEY_SANDBOX=true
+```
+
+```php
+// config/services.php
+'truemoney' => [
+    'merchant_id' => env('TRUEMONEY_MERCHANT_ID'),
+    'secret_key'  => env('TRUEMONEY_SECRET_KEY'),
+    'sandbox'     => env('TRUEMONEY_SANDBOX', true),
+    'base_url'    => env('TRUEMONEY_SANDBOX', true)
+        ? 'https://sandbox-api.truemoney.com'
+        : 'https://api.truemoney.com',
+],
+```
+
+---
+
+## TrueMoney Service
+
+```php
+// app/Services/TrueMoneyService.php
+class TrueMoneyService
+{
+    public function createPayment(Order $order): array
+    {
+        $payload = [
+            'merchant_id'  => config('services.truemoney.merchant_id'),
+            'order_id'     => $order->order_number,
+            'amount'       => (int) ($order->total * 100), // satang
+            'currency'     => 'THB',
+            'description'  => "Order #{$order->order_number}",
+            'return_url'   => route('payment.truemoney.return'),
+            'callback_url' => route('webhooks.truemoney'),
+            'expires_in'   => 900, // 15 minutes
+        ];
+
+        $payload['signature'] = $this->sign($payload);
+
+        $response = Http::post(
+            config('services.truemoney.base_url') . '/v1/payments',
+            $payload
+        )->throw();
+
+        $data = $response->json();
+
+        Payment::create([
+            'order_id'       => $order->id,
+            'gateway'        => 'truemoney',
+            'transaction_id' => $data['payment_id'],
+            'amount'         => $order->total,
+            'status'         => 'pending',
+            'metadata'       => $data,
+        ]);
+
+        return [
+            'payment_url' => $data['payment_url'],
+            'payment_id'  => $data['payment_id'],
+            'expires_at'  => now()->addSeconds(900),
+        ];
+    }
+
+    private function sign(array $payload): string
+    {
+        ksort($payload);
+        $string = http_build_query($payload);
+        return hash_hmac('sha256', $string, config('services.truemoney.secret_key'));
+    }
+
+    public function verifySignature(array $payload, string $signature): bool
+    {
+        unset($payload['signature']);
+        return hash_equals($this->sign($payload), $signature);
+    }
+}
+```
+
+---
+
+## Webhook Handler
+
+```php
+// app/Http/Controllers/TrueMoneyWebhookController.php
+class TrueMoneyWebhookController extends Controller
+{
+    public function __construct(private TrueMoneyService $trueMoney) {}
+
+    public function __invoke(Request $request)
+    {
+        $payload = $request->all();
+        $signature = $request->header('X-TrueMoney-Signature');
+
+        if (!$this->trueMoney->verifySignature($payload, $signature)) {
+            Log::warning('TrueMoney invalid signature');
+            return response('Invalid signature', 401);
+        }
+
+        $paymentId = $payload['payment_id'];
+        $status = $payload['status']; // 'SUCCESS', 'FAILED', 'EXPIRED'
+        $orderNumber = $payload['order_id'];
+
+        $payment = Payment::where('transaction_id', $paymentId)->firstOrFail();
+        $order = $payment->order;
+
+        match ($status) {
+            'SUCCESS' => $this->handleSuccess($order, $payment, $payload),
+            'FAILED'  => $payment->update(['status' => 'failed']),
+            'EXPIRED' => $payment->update(['status' => 'expired']),
+            default   => Log::info("Unknown TrueMoney status: {$status}"),
+        };
+
+        return response()->json(['status' => 'ok']);
+    }
+
+    private function handleSuccess(Order $order, Payment $payment, array $payload): void
+    {
+        if ($payment->status === 'completed') return;
+
+        DB::transaction(function () use ($order, $payment, $payload) {
+            $order->update(['status' => 'paid', 'paid_at' => now()]);
+            $payment->update([
+                'status'   => 'completed',
+                'paid_at'  => now(),
+                'metadata' => array_merge($payment->metadata ?? [], $payload),
+            ]);
+            OrderPaid::dispatch($order);
+        });
+    }
+}
+```
+
+---
+
+## Refund
+
+```php
+public function refund(Payment $payment, ?float $amount = null): array
+{
+    $refundAmount = $amount ?? $payment->amount;
+
+    $payload = [
+        'payment_id'    => $payment->transaction_id,
+        'refund_amount' => (int) ($refundAmount * 100),
+        'reason'        => 'Customer request',
+    ];
+    $payload['signature'] = $this->sign($payload);
+
+    $response = Http::post(
+        config('services.truemoney.base_url') . '/v1/refunds',
+        $payload
+    )->throw();
+
+    $payment->update(['status' => 'refunded']);
+
+    return $response->json();
+}
+```
+
+<Callout type="warning">
+TrueMoney amount ใช้หน่วย satang (1 บาท = 100 satang) — อย่าลืม convert ก่อนส่ง API
+</Callout>
+
+---
+
+## Controller
+
+```php
+// app/Http/Controllers/PaymentController.php
+public function payWithTrueMoney(Order $order, TrueMoneyService $trueMoney)
+{
+    $this->authorize('pay', $order);
+
+    $result = $trueMoney->createPayment($order);
+
+    return redirect($result['payment_url']);
+}
+
+public function trueMoneyReturn(Request $request)
+{
+    $orderNumber = $request->query('order_id');
+    $order = Order::where('order_number', $orderNumber)->firstOrFail();
+
+    // Webhook อาจมาช้ากว่า redirect — แสดง pending page
+    if ($order->status === 'paid') {
+        return redirect()->route('orders.success', $order);
+    }
+
+    return view('payment.pending', compact('order'));
+}
+```
+
+---
+
+## สรุป
+
+| Step | Detail |
+|---|---|
+| Amount | Satang (× 100) |
+| Signature | HMAC-SHA256 |
+| Webhook | Verify signature ทุกครั้ง |
+| Idempotency | Check payment status ก่อน update |
+| Refund | `/v1/refunds` endpoint |

@@ -1,0 +1,187 @@
+---
+title: "Laravel Forge — Server Management & Deployment"
+description: "ตั้งค่า Laravel Forge deploy Laravel app จัดการ queue scheduler SSL และ zero-downtime deployment"
+topic: devops
+subtopic: deployment
+tags:
+  - laravel-forge
+  - deployment
+  - server
+  - ssl
+  - zero-downtime
+difficulty: beginner
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 12
+is_premium: false
+---
+
+## Laravel Forge คืออะไร?
+
+**Laravel Forge** เป็น server management platform สำหรับ PHP/Laravel — provision server, deploy code, จัดการ SSL, queue workers และ cron โดยไม่ต้อง SSH manual
+
+<Callout type="info">
+Forge รองรับ DigitalOcean, AWS, Linode, Hetzner และ Vultr — popular ในไทยเพราะ setup เร็วและ UI ง่าย
+</Callout>
+
+---
+
+## Setup Server ใหม่
+
+1. Connect cloud provider (DigitalOcean API token)
+2. Create Server → เลือก region (Singapore ใกล้ไทย)
+3. เลือก PHP 8.3, MySQL 8, Redis
+4. Forge provision อัตโนมัติ (~5 นาที)
+
+---
+
+## สร้าง Site
+
+```
+Domain: shop.example.com
+Project Type: Laravel
+Web Directory: /public
+PHP Version: 8.3
+```
+
+### Environment Variables
+
+```bash
+APP_NAME="ThaiDevDocs Shop"
+APP_ENV=production
+APP_DEBUG=false
+APP_URL=https://shop.example.com
+
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_DATABASE=forge
+DB_USERNAME=forge
+DB_PASSWORD=xxxxx
+
+CACHE_STORE=redis
+QUEUE_CONNECTION=redis
+SESSION_DRIVER=redis
+REDIS_HOST=127.0.0.1
+```
+
+---
+
+## Deploy Script (Default + Custom)
+
+```bash
+# Forge default deploy script
+cd /home/forge/shop.example.com
+git pull origin $FORGE_SITE_BRANCH
+
+$FORGE_COMPOSER install --no-dev --no-interaction --prefer-dist --optimize-autoloader
+
+npm ci
+npm run build
+
+( flock -w 10 9 || exit 1
+    echo 'Restarting FPM...'; sudo -S service $FORGE_PHP_FPM reload ) 9>/tmp/fpmlock
+
+php artisan migrate --force
+php artisan config:cache
+php artisan route:cache
+php artisan view:cache
+php artisan queue:restart
+
+# Custom: clear application cache
+php artisan cache:clear
+```
+
+---
+
+## Zero-Downtime Deployment
+
+Forge รองรับ **Deploy Script with Zero Downtime**:
+
+```
+/home/forge/shop.example.com/current  → symlink ไป release ล่าสุด
+/home/forge/shop.example.com/releases/  → เก็บ release เก่า
+```
+
+Enable ใน Site Settings → Deployment → Zero Downtime Deployments
+
+---
+
+## Queue Workers
+
+Forge UI → Site → Queue:
+
+```
+Connection: redis
+Queue: default
+Processes: 2
+Sleep: 3
+Tries: 3
+Timeout: 90
+```
+
+Forge สร้าง Supervisor config อัตโนมัติ:
+
+```ini
+[program:shop-queue]
+command=php /home/forge/shop.example.com/artisan queue:work redis --sleep=3 --tries=3
+autostart=true
+autorestart=true
+user=forge
+numprocs=2
+```
+
+---
+
+## Scheduler (Cron)
+
+Forge ตั้ง cron ให้อัตโนมัติ:
+
+```
+* * * * * cd /home/forge/shop.example.com && php artisan schedule:run >> /dev/null 2>&1
+```
+
+---
+
+## SSL Certificate
+
+Site → SSL → LetsEncrypt → Obtain Certificate (ฟรี, auto-renew)
+
+<Callout type="tip">
+เปิด "Force HTTPS" หลัง SSL active — redirect HTTP → HTTPS อัตโนมัติ
+</Callout>
+
+---
+
+## Deploy Hooks (CI Integration)
+
+```yaml
+# GitHub Actions
+- name: Deploy to Forge
+  run: curl -X POST "${{ secrets.FORGE_DEPLOY_URL }}"
+```
+
+Forge → Site → Deployment → Enable Quick Deploy (auto deploy เมื่อ push ไป main)
+
+---
+
+## Database Backups
+
+Server → Backups → Configure:
+- Daily backup ตี 3
+- Retention 7 วัน
+- Store ใน S3/DigitalOcean Spaces
+
+---
+
+## สรุป
+
+| Feature | Forge Location |
+|---|---|
+| Environment | Site → Environment |
+| Deploy script | Site → Deployment |
+| Queue workers | Site → Queue |
+| SSL | Site → SSL |
+| Backups | Server → Backups |
+| CI hook | Deployment → Deploy URL |

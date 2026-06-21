@@ -1,0 +1,217 @@
+---
+title: "LangGraph.js — AI Agent Workflows"
+description: "สร้าง multi-step AI agent ด้วย LangGraph.js state graphs conditional routing และ integration กับ Laravel API"
+topic: ai
+subtopic: agents
+tags:
+  - langgraph
+  - agents
+  - javascript
+  - workflow
+  - llm
+difficulty: advanced
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 15
+is_premium: false
+---
+
+## LangGraph คืออะไร?
+
+**LangGraph** เป็น library สำหรับสร้าง stateful AI agent workflows — กำหนด nodes, edges และ conditional routing แทน single prompt chain
+
+<Callout type="info">
+LangGraph.js รันได้ใน Node.js — ใช้เป็น microservice แยกจาก Laravel แล้วเรียกผ่าน API
+</Callout>
+
+---
+
+## ติดตั้ง
+
+```bash
+npm install @langchain/langgraph @langchain/anthropic @langchain/core
+```
+
+```typescript
+// agent/types.ts
+import { Annotation } from '@langchain/langgraph'
+
+export const AgentState = Annotation.Root({
+  messages: Annotation<BaseMessage[]>({
+    reducer: (current, update) => [...current, ...update],
+    default: () => [],
+  }),
+  query: Annotation<string>(),
+  context: Annotation<string>(),
+  answer: Annotation<string>(),
+  needsSearch: Annotation<boolean>(),
+})
+```
+
+---
+
+## Simple RAG Agent Graph
+
+```typescript
+// agent/rag-agent.ts
+import { StateGraph, END, START } from '@langchain/langgraph'
+import { ChatAnthropic } from '@langchain/anthropic'
+import { AgentState } from './types'
+
+const llm = new ChatAnthropic({
+  model: 'claude-sonnet-4-20250514',
+  apiKey: process.env.ANTHROPIC_API_KEY,
+})
+
+async function classifyQuery(state: typeof AgentState.State) {
+  const response = await llm.invoke([
+    {
+      role: 'user',
+      content: `ต้องค้นหา docs ก่อนตอบไหม? ตอบ YES หรือ NO เท่านั้น\n\nคำถาม: ${state.query}`,
+    },
+  ])
+
+  const needsSearch = response.content.toString().includes('YES')
+  return { needsSearch }
+}
+
+async function searchDocs(state: typeof AgentState.State) {
+  const res = await fetch(`${process.env.LARAVEL_API}/api/search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query: state.query }),
+  })
+  const { results } = await res.json()
+  const context = results.map((r: any) => r.content).join('\n\n')
+  return { context }
+}
+
+async function generateAnswer(state: typeof AgentState.State) {
+  const prompt = state.context
+    ? `ใช้ context นี้ตอบ:\n${state.context}\n\nคำถาม: ${state.query}`
+    : state.query
+
+  const response = await llm.invoke([{ role: 'user', content: prompt }])
+  return { answer: response.content.toString() }
+}
+
+function routeSearch(state: typeof AgentState.State) {
+  return state.needsSearch ? 'search' : 'generate'
+}
+
+const graph = new StateGraph(AgentState)
+  .addNode('classify', classifyQuery)
+  .addNode('search', searchDocs)
+  .addNode('generate', generateAnswer)
+  .addEdge(START, 'classify')
+  .addConditionalEdges('classify', routeSearch, {
+    search: 'search',
+    generate: 'generate',
+  })
+  .addEdge('search', 'generate')
+  .addEdge('generate', END)
+
+export const ragAgent = graph.compile()
+```
+
+---
+
+## Run Agent
+
+```typescript
+// server.ts
+import express from 'express'
+import { ragAgent } from './agent/rag-agent'
+
+const app = express()
+app.use(express.json())
+
+app.post('/agent/ask', async (req, res) => {
+  const { query } = req.body
+
+  const result = await ragAgent.invoke({
+    query,
+    messages: [],
+    context: '',
+    answer: '',
+    needsSearch: false,
+  })
+
+  res.json({ answer: result.answer })
+})
+
+app.listen(3001, () => console.log('Agent server :3001'))
+```
+
+---
+
+## Human-in-the-Loop
+
+```typescript
+import { interrupt } from '@langchain/langgraph'
+
+async function approveAction(state: typeof AgentState.State) {
+  if (state.query.includes('ลบ') || state.query.includes('delete')) {
+    const approval = interrupt({
+      action: 'destructive',
+      message: 'ต้องการยืนยันการดำเนินการนี้?',
+    })
+    if (!approval) return { answer: 'ยกเลิกการดำเนินการ' }
+  }
+  return {}
+}
+```
+
+---
+
+## Laravel Integration
+
+```php
+// app/Http/Controllers/AgentController.php
+class AgentController extends Controller
+{
+    public function ask(Request $request)
+    {
+        $response = Http::timeout(60)
+            ->post(config('services.agent.url') . '/agent/ask', [
+                'query' => $request->message,
+            ]);
+
+        return response()->json($response->json());
+    }
+}
+```
+
+```bash
+# .env
+AGENT_SERVICE_URL=http://localhost:3001
+```
+
+---
+
+## Persistence & Checkpointing
+
+```typescript
+import { MemorySaver } from '@langchain/langgraph'
+
+const checkpointer = new MemorySaver()
+export const ragAgent = graph.compile({ checkpointer })
+
+// Resume conversation
+const config = { configurable: { thread_id: 'user-123' } }
+await ragAgent.invoke({ query: '...' }, config)
+```
+
+---
+
+## สรุป
+
+| Concept | LangGraph |
+|---|---|
+| State | `Annotation.Root()` |
+| Nodes | Async functions |
+| Edges | `addEdge()` / `addConditionalEdges()` |
+| Routing | Conditional function |
+| Persistence | Checkpointer + thread_id |
+| Laravel | HTTP microservice |

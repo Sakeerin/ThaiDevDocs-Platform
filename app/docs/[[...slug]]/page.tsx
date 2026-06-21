@@ -19,6 +19,10 @@ import { EditOnGitHubButton } from '@/components/edit-on-github-button';
 import { ArticleFooter } from '@/components/article-footer';
 import { ArticleViewTracker } from '@/components/article-view-tracker';
 import { ReadingProgress } from '@/components/reading-progress';
+import { AiChat } from '@/components/ai-chat';
+import { PremiumGate } from '@/components/premium-gate';
+import { getSession } from '@/lib/auth';
+import { getSubscriptionStatus } from '@/lib/subscription';
 
 export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
   const params = await props.params;
@@ -30,6 +34,8 @@ export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
   const processed = await page.data.getText('processed');
   const readingTimeMinutes = calculateReadingTime(processed);
   const pageUrl = page.url;
+  const session = await getSession();
+  const subscription = await getSubscriptionStatus();
 
   return (
     <>
@@ -68,15 +74,22 @@ export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
           />
         </div>
         <DocsBody>
-          <MDX
-            components={getMDXComponents({
-              // this allows you to link to other pages with relative file paths
-              a: createRelativeLink(source, page),
-            })}
-          />
+          <PremiumGate isPremium={page.data.is_premium}>
+            <MDX
+              components={getMDXComponents({
+                // this allows you to link to other pages with relative file paths
+                a: createRelativeLink(source, page),
+              })}
+            />
+          </PremiumGate>
         </DocsBody>
         <ArticleFooter slug={pageUrl} pageUrl={pageUrl} pageTitle={page.data.title} />
       </DocsPage>
+      <AiChat
+        articleSlug={pageUrl}
+        isPro={subscription.isPro}
+        isLoggedIn={Boolean(session?.user)}
+      />
     </>
   );
 }

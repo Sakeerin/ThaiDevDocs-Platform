@@ -1,0 +1,271 @@
+---
+title: "Vite + Laravel Configuration สำหรับ Vue"
+description: "ตั้งค่า Vite ใน Laravel 11 กับ Vue 3 HMR alias env variables และ production build optimization"
+topic: vue
+subtopic: tooling
+tags:
+  - vite
+  - laravel
+  - vue
+  - hmr
+  - build
+difficulty: intermediate
+vue_version: "3.x"
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 13
+is_premium: false
+---
+
+## Laravel + Vite + Vue Stack
+
+Laravel 11 ใช้ **Vite** เป็น default asset bundler — รองรับ Vue 3, HMR เร็ว และ production build ด้วย Rollup
+
+---
+
+## ติดตั้ง Vue ใน Laravel
+
+```bash
+npm install vue @vitejs/plugin-vue
+npm install -D @types/node
+```
+
+```typescript
+// vite.config.js
+import { defineConfig } from 'vite'
+import laravel from 'laravel-vite-plugin'
+import vue from '@vitejs/plugin-vue'
+import path from 'path'
+
+export default defineConfig({
+  plugins: [
+    laravel({
+      input: ['resources/css/app.css', 'resources/js/app.ts'],
+      refresh: true,
+    }),
+    vue({
+      template: {
+        transformAssetUrls: {
+          base: null,
+          includeAbsolute: false,
+        },
+      },
+    }),
+  ],
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, 'resources/js'),
+      '@components': path.resolve(__dirname, 'resources/js/components'),
+    },
+  },
+})
+```
+
+---
+
+## Entry Point
+
+```typescript
+// resources/js/app.ts
+import { createApp } from 'vue'
+import { createPinia } from 'pinia'
+import router from './router'
+import App from './App.vue'
+import '../css/app.css'
+
+const app = createApp(App)
+app.use(createPinia())
+app.use(router)
+app.mount('#app')
+```
+
+```blade
+{{-- resources/views/app.blade.php --}}
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    @vite(['resources/css/app.css', 'resources/js/app.ts'])
+</head>
+<body>
+    <div id="app"></div>
+</body>
+</html>
+```
+
+---
+
+## Environment Variables
+
+```bash
+# .env
+VITE_API_URL=http://localhost:8000/api
+VITE_APP_NAME="ThaiDevDocs Shop"
+```
+
+```typescript
+// resources/js/lib/config.ts
+export const config = {
+  apiUrl: import.meta.env.VITE_API_URL as string,
+  appName: import.meta.env.VITE_APP_NAME as string,
+}
+```
+
+<Callout type="warning">
+ตัวแปร Vite ต้องขึ้นต้นด้วย `VITE_` เท่านั้น — ค่าอื่นจะไม่ expose ไป client bundle (security)
+</Callout>
+
+---
+
+## HMR กับ Docker/WSL
+
+```typescript
+// vite.config.js — เมื่อรัน Laravel ใน Docker
+export default defineConfig({
+  server: {
+    host: '0.0.0.0',
+    hmr: {
+      host: 'localhost',
+    },
+    watch: {
+      usePolling: true, // จำเป็นใน Docker volume บาง setup
+    },
+  },
+})
+```
+
+---
+
+## TypeScript Config
+
+```json
+// tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "jsx": "preserve",
+    "paths": {
+      "@/*": ["resources/js/*"]
+    }
+  },
+  "include": ["resources/js/**/*.ts", "resources/js/**/*.vue"]
+}
+```
+
+```typescript
+// resources/js/env.d.ts
+/// <reference types="vite/client" />
+
+interface ImportMetaEnv {
+  readonly VITE_API_URL: string
+  readonly VITE_APP_NAME: string
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv
+}
+```
+
+---
+
+## Auto Import Components
+
+```bash
+npm install -D unplugin-vue-components
+```
+
+```typescript
+// vite.config.js
+import Components from 'unplugin-vue-components/vite'
+
+export default defineConfig({
+  plugins: [
+    Components({
+      dirs: ['resources/js/components'],
+      dts: 'resources/js/components.d.ts',
+    }),
+  ],
+})
+```
+
+---
+
+## Production Build
+
+```bash
+npm run build
+# output → public/build/
+```
+
+```typescript
+// vite.config.js — production optimization
+export default defineConfig({
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['vue', 'vue-router', 'pinia'],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 600,
+  },
+})
+```
+
+---
+
+## Inertia.js Integration
+
+```typescript
+// resources/js/app.ts — Inertia entry
+import { createInertiaApp } from '@inertiajs/vue3'
+import { createApp, h } from 'vue'
+
+createInertiaApp({
+  resolve: (name) => {
+    const pages = import.meta.glob('./Pages/**/*.vue')
+    return pages[`./Pages/${name}.vue`]()
+  },
+  setup({ el, App, props, plugin }) {
+    createApp({ render: () => h(App, props) })
+      .use(plugin)
+      .mount(el)
+  },
+})
+```
+
+---
+
+## Deploy Checklist
+
+```bash
+# Production
+composer install --optimize-autoloader --no-dev
+npm ci
+npm run build
+php artisan config:cache
+php artisan route:cache
+php artisan view:cache
+```
+
+<Callout type="tip">
+ใน Forge/CI ให้รัน `npm run build` ก่อน deploy — อย่า commit `public/build/` ถ้า build ใน pipeline
+</Callout>
+
+---
+
+## สรุป
+
+| Task | Config/Command |
+|---|---|
+| Vue plugin | `@vitejs/plugin-vue` |
+| Path alias | `resolve.alias` → `@/` |
+| Env vars | `VITE_*` ใน `.env` |
+| HMR Docker | `server.host` + `hmr.host` |
+| Auto components | `unplugin-vue-components` |
+| Production | `npm run build` → `public/build/` |

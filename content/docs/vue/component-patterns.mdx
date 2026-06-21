@@ -1,0 +1,301 @@
+---
+title: "Vue Component Patterns — Best Practices"
+description: "รูปแบบ component ที่ใช้บ่อยใน Vue 3 ตั้งแต่ compound components, slots, provide/inject จนถึง renderless components"
+topic: vue
+subtopic: components
+tags:
+  - components
+  - patterns
+  - slots
+  - provide-inject
+  - composition
+difficulty: intermediate
+vue_version: "3.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 14
+is_premium: false
+---
+
+## หลักการออกแบบ Component
+
+Component ที่ดีควร **ทำหน้าที่เดียว**, **รับ props ชัดเจน**, และ **emit events** แทน mutate state จาก parent โดยตรง
+
+<Callout type="info">
+Vue 3 แนะนำ Composition API + `<script setup>` — patterns ด้านล่างใช้ syntax นี้เป็นหลัก
+</Callout>
+
+---
+
+## Presentational vs Container
+
+```vue
+<!-- Presentational: แสดง UI อย่างเดียว -->
+<script setup lang="ts">
+defineProps<{
+  order: Order
+  loading?: boolean
+}>()
+
+defineEmits<{
+  cancel: []
+  pay: []
+}>()
+</script>
+
+<template>
+  <div class="order-card">
+    <h3>{{ order.number }}</h3>
+    <p>{{ order.total.toLocaleString('th-TH') }} บาท</p>
+    <button v-if="!loading" @click="$emit('pay')">ชำระเงิน</button>
+  </div>
+</template>
+```
+
+```vue
+<!-- Container: จัดการ logic และ data -->
+<script setup lang="ts">
+import { ref, onMounted } from 'vue'
+import OrderCard from './OrderCard.vue'
+import { useOrderStore } from '@/stores/orders'
+
+const store = useOrderStore()
+const paying = ref(false)
+
+async function handlePay(orderId: number) {
+  paying.value = true
+  await store.payOrder(orderId)
+  paying.value = false
+}
+
+onMounted(() => store.fetchOrders())
+</script>
+
+<template>
+  <OrderCard
+    v-for="order in store.orders"
+    :key="order.id"
+    :order="order"
+    :loading="paying"
+    @pay="handlePay(order.id)"
+  />
+</template>
+```
+
+---
+
+## Named & Scoped Slots
+
+```vue
+<!-- DataTable.vue — reusable table -->
+<script setup lang="ts" generic="T">
+defineProps<{
+  items: T[]
+  columns: { key: keyof T; label: string }[]
+}>()
+</script>
+
+<template>
+  <table>
+    <thead>
+      <tr>
+        <th v-for="col in columns" :key="String(col.key)">{{ col.label }}</th>
+        <th v-if="$slots.actions">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr v-for="(item, index) in items" :key="index">
+        <td v-for="col in columns" :key="String(col.key)">
+          <!-- Scoped slot — ส่ง data ให้ parent customize -->
+          <slot :name="String(col.key)" :item="item" :value="item[col.key]">
+            {{ item[col.key] }}
+          </slot>
+        </td>
+        <td v-if="$slots.actions">
+          <slot name="actions" :item="item" />
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</template>
+```
+
+```vue
+<!-- ใช้งาน -->
+<DataTable :items="orders" :columns="columns">
+  <template #status="{ value }">
+    <Badge :variant="value === 'paid' ? 'success' : 'warning'">
+      {{ value }}
+    </Badge>
+  </template>
+  <template #actions="{ item }">
+    <button @click="viewOrder(item.id)">ดู</button>
+  </template>
+</DataTable>
+```
+
+---
+
+## Provide / Inject
+
+```vue
+<!-- AppLayout.vue -->
+<script setup lang="ts">
+import { provide, ref, readonly } from 'vue'
+
+const sidebarOpen = ref(true)
+const toggleSidebar = () => { sidebarOpen.value = !sidebarOpen.value }
+
+provide('layout', {
+  sidebarOpen: readonly(sidebarOpen),
+  toggleSidebar,
+})
+</script>
+```
+
+```vue
+<!-- SidebarToggle.vue — ลึกหลายชั้นก็ inject ได้ -->
+<script setup lang="ts">
+import { inject } from 'vue'
+
+const layout = inject<{ toggleSidebar: () => void }>('layout')
+</script>
+
+<template>
+  <button @click="layout?.toggleSidebar()">Toggle Menu</button>
+</template>
+```
+
+<Callout type="warning">
+ใช้ `readonly()` กับ provide state — ป้องกัน child mutate โดยตรง ให้เปลี่ยนผ่าน methods เท่านั้น
+</Callout>
+
+---
+
+## Compound Components
+
+```vue
+<!-- Tabs.vue -->
+<script setup lang="ts">
+import { provide, ref } from 'vue'
+
+const activeTab = ref(0)
+provide('tabs', { activeTab })
+</script>
+
+<template>
+  <div class="tabs">
+    <slot />
+  </div>
+</template>
+```
+
+```vue
+<!-- TabList.vue -->
+<template>
+  <div role="tablist" class="tab-list">
+    <slot />
+  </div>
+</template>
+```
+
+```vue
+<!-- Tab.vue -->
+<script setup lang="ts">
+import { inject, computed } from 'vue'
+
+const props = defineProps<{ index: number }>()
+const tabs = inject<{ activeTab: Ref<number> }>('tabs')!
+
+const isActive = computed(() => tabs.activeTab.value === props.index)
+
+function select() {
+  tabs.activeTab.value = props.index
+}
+</script>
+
+<template>
+  <button :class="{ active: isActive }" @click="select">
+    <slot />
+  </button>
+</template>
+```
+
+```vue
+<!-- ใช้งาน -->
+<Tabs>
+  <TabList>
+    <Tab :index="0">ข้อมูลทั่วไป</Tab>
+    <Tab :index="1">ที่อยู่</Tab>
+  </TabList>
+  <TabPanel :index="0">...</TabPanel>
+  <TabPanel :index="1">...</TabPanel>
+</Tabs>
+```
+
+---
+
+## v-model หลายตัว
+
+```vue
+<!-- DateRangePicker.vue -->
+<script setup lang="ts">
+const startDate = defineModel<string>('startDate')
+const endDate = defineModel<string>('endDate')
+</script>
+
+<template>
+  <div class="date-range">
+    <input type="date" v-model="startDate" />
+    <span>ถึง</span>
+    <input type="date" v-model="endDate" />
+  </div>
+</template>
+```
+
+```vue
+<!-- Parent -->
+<DateRangePicker
+  v-model:start-date="filters.from"
+  v-model:end-date="filters.to"
+/>
+```
+
+---
+
+## Async Component + Suspense
+
+```vue
+<script setup lang="ts">
+import { defineAsyncComponent } from 'vue'
+
+const HeavyChart = defineAsyncComponent(() =>
+  import('./HeavyChart.vue')
+)
+</script>
+
+<template>
+  <Suspense>
+    <template #default>
+      <HeavyChart :data="chartData" />
+    </template>
+    <template #fallback>
+      <div class="skeleton">กำลังโหลด chart...</div>
+    </template>
+  </Suspense>
+</template>
+```
+
+---
+
+## สรุป
+
+| Pattern | ใช้เมื่อ |
+|---|---|
+| Presentational/Container | แยก UI กับ business logic |
+| Scoped slots | Customize cell/row ใน reusable table |
+| Provide/Inject | Share state ข้าม component tree ลึก |
+| Compound components | UI kit เช่น Tabs, Accordion |
+| Multiple v-model | Form component หลาย fields |
+| Async + Suspense | Lazy load component หนัก |

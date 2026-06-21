@@ -1,0 +1,236 @@
+---
+title: "Laravel Monitoring & Observability"
+description: "ตั้งค่า monitoring สำหรับ Laravel ด้วย Telescope Horizon health checks logging และ APM tools"
+topic: devops
+subtopic: monitoring
+tags:
+  - monitoring
+  - telescope
+  - logging
+  - health-check
+  - apm
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 13
+is_premium: false
+---
+
+## ทำไมต้อง Monitor Laravel?
+
+Production app ต้องรู้ก่อน user ร้อง — slow queries, failed jobs, error spikes และ downtime
+
+---
+
+## Health Check Endpoint
+
+```php
+// routes/web.php
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Redis;
+
+Route::get('/health', function () {
+    $checks = [
+        'app'      => 'ok',
+        'database' => 'ok',
+        'redis'    => 'ok',
+        'queue'    => 'ok',
+    ];
+
+    try {
+        DB::connection()->getPdo();
+    } catch (\Exception $e) {
+        $checks['database'] = 'failed';
+    }
+
+    try {
+        Redis::ping();
+    } catch (\Exception $e) {
+        $checks['redis'] = 'failed';
+    }
+
+    try {
+        $size = Queue::size('default');
+        $checks['queue'] = $size > 1000 ? 'degraded' : 'ok';
+    } catch (\Exception $e) {
+        $checks['queue'] = 'failed';
+    }
+
+    $healthy = !in_array('failed', $checks);
+    $status = $healthy ? 200 : 503;
+
+    return response()->json([
+        'status' => $healthy ? 'healthy' : 'unhealthy',
+        'checks' => $checks,
+        'timestamp' => now()->toIso8601String(),
+    ], $status);
+});
+```
+
+<Callout type="tip">
+ใช้ `/health` กับ uptime monitor (UptimeRobot, Pingdom) — check ทุก 1-5 นาที
+</Callout>
+
+---
+
+## Laravel Telescope (Development)
+
+```bash
+composer require laravel/telescope --dev
+php artisan telescope:install
+php artisan migrate
+```
+
+```php
+// AppServiceProvider — จำกัด access
+Telescope::filter(function (IncomingEntry $entry) {
+    if ($this->app->environment('local')) return true;
+    return $entry->isReportableException()
+        || $entry->isFailedRequest()
+        || $entry->isSlowQuery();
+});
+```
+
+Telescope แสดง: requests, queries, jobs, mail, cache, exceptions
+
+---
+
+## Laravel Horizon (Queue Monitoring)
+
+```bash
+composer require laravel/horizon
+```
+
+Horizon dashboard ที่ `/horizon`:
+- Job throughput และ wait time
+- Failed jobs + retry
+- Worker status
+- Metrics graphs
+
+```php
+// Horizon authorization
+protected function gate(): void
+{
+    Gate::define('viewHorizon', function ($user) {
+        return in_array($user->email, ['admin@example.com']);
+    });
+}
+```
+
+---
+
+## Structured Logging
+
+```php
+// config/logging.php
+'channels' => [
+    'stack' => [
+        'driver' => 'stack',
+        'channels' => ['daily', 'slack'],
+    ],
+    'daily' => [
+        'driver' => 'daily',
+        'path' => storage_path('logs/laravel.log'),
+        'level' => env('LOG_LEVEL', 'debug'),
+        'days' => 14,
+    ],
+    'slack' => [
+        'driver' => 'slack',
+        'url' => env('LOG_SLACK_WEBHOOK_URL'),
+        'level' => 'critical',
+    ],
+],
+```
+
+```php
+// Usage
+Log::info('Order placed', [
+    'order_id' => $order->id,
+    'user_id'  => $order->user_id,
+    'total'    => $order->total,
+]);
+
+Log::error('Payment failed', [
+    'order_id' => $order->id,
+    'gateway'  => 'omise',
+    'error'    => $exception->getMessage(),
+]);
+```
+
+---
+
+## Exception Reporting (Sentry)
+
+```bash
+composer require sentry/sentry-laravel
+```
+
+```php
+// bootstrap/app.php
+->withExceptions(function (Exceptions $exceptions) {
+    Integration::handles($exceptions);
+})
+```
+
+```bash
+# .env
+SENTRY_LARAVEL_DSN=https://xxx@sentry.io/xxx
+```
+
+---
+
+## Custom Metrics
+
+```php
+// AppServiceProvider
+Event::listen(OrderPlaced::class, function (OrderPlaced $event) {
+    Cache::increment('metrics:orders:today:' . now()->format('Y-m-d'));
+});
+
+// Dashboard query
+$todayOrders = Cache::get('metrics:orders:today:' . now()->format('Y-m-d'), 0);
+```
+
+---
+
+## Server Monitoring
+
+```bash
+# Basic server metrics
+htop                    # CPU, memory
+df -h                   # Disk usage
+journalctl -u php8.3-fpm  # PHP-FPM logs
+
+# Laravel-specific
+php artisan queue:monitor redis:default --max=100
+php artisan schedule:list
+```
+
+---
+
+## Alerting Checklist
+
+| Metric | Threshold | Action |
+|---|---|---|
+| HTTP 5xx rate | > 1% | Slack alert |
+| Response time p95 | > 2s | Investigate |
+| Queue size | > 500 | Scale workers |
+| Failed jobs | > 10/hour | Check logs |
+| Disk usage | > 85% | Cleanup/expand |
+| SSL expiry | < 14 days | Renew cert |
+
+---
+
+## สรุป
+
+| Tool | Environment | Purpose |
+|---|---|---|
+| `/health` endpoint | Production | Uptime monitoring |
+| Telescope | Local/Staging | Debug requests/queries |
+| Horizon | Production | Queue monitoring |
+| Sentry | Production | Error tracking |
+| Structured logs | All | Audit trail |
+| Slack alerts | Production | Real-time notification |

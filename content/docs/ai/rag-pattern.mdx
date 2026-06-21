@@ -1,0 +1,240 @@
+---
+title: "RAG Pattern — Retrieval-Augmented Generation"
+description: "ออกแบบและ implement RAG pipeline สำหรับ Q&A จาก docs ครบตั้งแต่ chunking embedding retrieval จนถึง generation"
+topic: ai
+subtopic: rag
+tags:
+  - rag
+  - retrieval
+  - embeddings
+  - llm
+  - laravel
+difficulty: advanced
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 16
+is_premium: false
+---
+
+## RAG คืออะไร?
+
+**Retrieval-Augmented Generation (RAG)** คือ pattern ที่ LLM ตอบคำถามโดยอ้างอิง documents ที่ retrieve มาก่อน — ลด hallucination และตอบจากข้อมูลจริงของเรา
+
+```
+User Question
+    ↓
+Embed Query → Vector Search → Top-K Chunks
+    ↓
+Build Prompt (context + question)
+    ↓
+LLM Generate Answer
+    ↓
+Return Answer + Sources
+```
+
+---
+
+## Pipeline Overview
+
+| Step | หน้าที่ |
+|---|---|
+| Ingest | โหลด docs → chunk → embed → store |
+| Retrieve | embed query → similarity search |
+| Generate | ส่ง context + query ไป LLM |
+| Respond | คืน answer + source citations |
+
+---
+
+## Document Chunking
+
+```php
+// app/Services/DocumentChunker.php
+class DocumentChunker
+{
+    public function chunk(string $content, int $maxTokens = 500, int $overlap = 50): array
+    {
+        $paragraphs = preg_split('/\n{2,}/', $content);
+        $chunks = [];
+        $current = '';
+
+        foreach ($paragraphs as $paragraph) {
+            $paragraph = trim($paragraph);
+            if (empty($paragraph)) continue;
+
+            if (mb_strlen($current) + mb_strlen($paragraph) > $maxTokens * 4) {
+                if ($current) $chunks[] = trim($current);
+                $current = mb_substr($current, -$overlap * 4) . "\n\n" . $paragraph;
+            } else {
+                $current .= ($current ? "\n\n" : '') . $paragraph;
+            }
+        }
+
+        if ($current) $chunks[] = trim($current);
+        return $chunks;
+    }
+}
+```
+
+<Callout type="tip">
+Chunk 500 tokens + overlap 50 tokens — balance ระหว่าง context ครบกับ retrieval แม่นยำ
+</Callout>
+
+---
+
+## Ingest Pipeline
+
+```php
+// app/Jobs/EmbedContentJob.php
+class EmbedContentJob implements ShouldQueue
+{
+    public function __construct(
+        public string $filePath,
+        public string $title,
+    ) {}
+
+    public function handle(
+        DocumentChunker $chunker,
+        EmbeddingService $embedder,
+    ): void {
+        $content = file_get_contents($this->filePath);
+        $chunks = $chunker->chunk($content);
+
+        foreach ($chunks as $index => $chunk) {
+            $section = ContentSection::create([
+                'source_path' => $this->filePath,
+                'title'       => "{$this->title} (part {$index})",
+                'content'     => $chunk,
+            ]);
+
+            $embedder->storeWithEmbedding($section);
+        }
+    }
+}
+```
+
+---
+
+## AiQaService — Core RAG
+
+```php
+// app/Services/AiQaService.php
+class AiQaService
+{
+    public function __construct(
+        private ContentSearchService $search,
+        private ClaudeService $claude,
+    ) {}
+
+    public function ask(string $question, ?int $userId = null): array
+    {
+        $results = $this->search->search($question, limit: 5);
+
+        if (empty($results)) {
+            return [
+                'answer'  => 'ไม่พบข้อมูลที่เกี่ยวข้องใน docs',
+                'sources' => [],
+            ];
+        }
+
+        $context = collect($results)->map(fn ($r, $i) =>
+            "[{$i + 1}] {$r->title}\n{$r->content}"
+        )->join("\n\n---\n\n");
+
+        $systemPrompt = <<<PROMPT
+คุณเป็นผู้ช่วย Q&A ของ ThaiDevDocs ตอบจาก context ที่ให้เท่านั้น
+ถ้าไม่มีข้อมูลใน context ให้บอกว่าไม่ทราบ
+อ้างอิง source ด้วย [1], [2] ตามหมายเลขใน context
+ตอบเป็นภาษาไทย กระชับ มี code example เมื่อเหมาะสม
+PROMPT;
+
+        $userMessage = "Context:\n{$context}\n\nคำถาม: {$question}";
+
+        $answer = $this->claude->chat($userMessage, $systemPrompt);
+
+        AiQuery::create([
+            'user_id'  => $userId,
+            'question' => $question,
+            'answer'   => $answer,
+        ]);
+
+        return [
+            'answer'  => $answer,
+            'sources' => collect($results)->map(fn ($r) => [
+                'title'      => $r->title,
+                'path'       => $r->source_path,
+                'similarity' => round($r->similarity, 3),
+            ])->all(),
+        ];
+    }
+}
+```
+
+---
+
+## API Endpoint
+
+```php
+// app/Http/Controllers/AiQaController.php
+class AiQaController extends Controller
+{
+    public function __invoke(Request $request, AiQaService $qa)
+    {
+        $request->validate(['question' => 'required|string|max:1000']);
+
+        $result = $qa->ask(
+            question: $request->question,
+            userId: $request->user()?->id,
+        );
+
+        return response()->json($result);
+    }
+}
+```
+
+---
+
+## Re-ranking (Optional)
+
+```php
+// หลัง vector search — re-rank ด้วย cross-encoder หรือ LLM
+public function rerank(string $query, array $results, int $topK = 3): array
+{
+    $prompt = "จัดอันดับ relevance ของ passages ต่อคำถาม (1-5):\n\n";
+    foreach ($results as $i => $r) {
+        $prompt .= "[{$i}] {$r->content}\n\n";
+    }
+    $prompt .= "คำถาม: {$query}\nตอบเป็น JSON array ของ index เรียงจาก relevant มากสุด";
+
+    // Parse LLM response → reorder results
+    return array_slice($reranked, 0, $topK);
+}
+```
+
+---
+
+## Evaluation Metrics
+
+```php
+// วัดคุณภาพ RAG
+// 1. Retrieval recall — คำตอบอยู่ใน top-K chunks ไหม?
+// 2. Answer relevance — LLM judge score
+// 3. Source accuracy — citation ตรงกับ content จริงไหม?
+```
+
+<Callout type="warning">
+RAG ไม่ได้ perfect — monitor `AiQuery` logs หา questions ที่ตอบไม่ได้แล้วเพิ่ม docs หรือปรับ chunking
+</Callout>
+
+---
+
+## สรุป
+
+| Component | Responsibility |
+|---|---|
+| DocumentChunker | แบ่ง docs เป็น chunks |
+| EmbeddingService | Text → vector |
+| ContentSearchService | Vector similarity search |
+| AiQaService | Orchestrate RAG pipeline |
+| AiQuery model | Log queries สำหรับ analytics |

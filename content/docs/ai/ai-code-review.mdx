@@ -1,0 +1,271 @@
+---
+title: "AI Code Review Automation"
+description: "สร้างระบบ AI code review อัตโนมัติด้วย GitHub webhook Claude API และ PR comment integration"
+topic: ai
+subtopic: automation
+tags:
+  - code-review
+  - github
+  - ai
+  - automation
+  - ci
+difficulty: advanced
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 14
+is_premium: false
+---
+
+## AI Code Review คืออะไร?
+
+ใช้ LLM วิเคราะห์ code changes ใน PR อัตโนมัติ — หา bugs, security issues, และ style problems ก่อน human reviewer
+
+<Callout type="info">
+AI review ไม่แทน human review — ใช้เป็น first pass ลด noise และ catch issues พื้นฐาน
+</Callout>
+
+---
+
+## Architecture
+
+```
+GitHub PR opened/updated
+    ↓
+Webhook → Laravel
+    ↓
+Fetch diff via GitHub API
+    ↓
+Send diff + review prompt → Claude
+    ↓
+Post review comments กลับ GitHub
+```
+
+---
+
+## GitHub Webhook Handler
+
+```php
+// app/Http/Controllers/GitHubWebhookController.php
+class GitHubWebhookController extends Controller
+{
+    public function __construct(
+        private AiCodeReviewService $reviewer,
+    ) {}
+
+    public function __invoke(Request $request)
+    {
+        $event = $request->header('X-GitHub-Event');
+        $payload = $request->all();
+
+        if ($event === 'pull_request') {
+            $action = $payload['action'];
+            if (in_array($action, ['opened', 'synchronize'])) {
+                ReviewPullRequestJob::dispatch(
+                    repo: $payload['repository']['full_name'],
+                    prNumber: $payload['pull_request']['number'],
+                );
+            }
+        }
+
+        return response('OK');
+    }
+}
+```
+
+---
+
+## Fetch PR Diff
+
+```php
+// app/Services/GitHubService.php
+class GitHubService
+{
+    public function getPullRequestDiff(string $repo, int $prNumber): string
+    {
+        $response = Http::withToken(config('services.github.token'))
+            ->withHeaders(['Accept' => 'application/vnd.github.diff'])
+            ->get("https://api.github.com/repos/{$repo}/pulls/{$prNumber}");
+
+        return $response->body();
+    }
+
+    public function postReviewComment(
+        string $repo,
+        int $prNumber,
+        string $body,
+    ): void {
+        Http::withToken(config('services.github.token'))
+            ->post("https://api.github.com/repos/{$repo}/issues/{$prNumber}/comments", [
+                'body' => $body,
+            ]);
+    }
+}
+```
+
+---
+
+## AI Review Service
+
+```php
+// app/Services/AiCodeReviewService.php
+class AiCodeReviewService
+{
+    public function __construct(
+        private ClaudeService $claude,
+        private GitHubService $github,
+    ) {}
+
+    public function review(string $repo, int $prNumber): void
+    {
+        $diff = $this->github->getPullRequestDiff($repo, $prNumber);
+
+        // จำกัด diff size — Claude context limit
+        if (strlen($diff) > 50000) {
+            $diff = mb_substr($diff, 0, 50000) . "\n\n... (truncated)";
+        }
+
+        $systemPrompt = <<<PROMPT
+คุณเป็น senior Laravel/PHP code reviewer วิเคราะห์ PR diff และให้ feedback เป็นภาษาไทย
+
+ตรวจหา:
+1. Security vulnerabilities (SQL injection, XSS, mass assignment)
+2. N+1 query problems
+3. Missing validation/error handling
+4. Laravel best practices violations
+5. Performance issues
+
+Format ตอบเป็น Markdown:
+## สรุป
+(1-2 ประโยค)
+
+## Issues
+### 🔴 Critical
+- file:line — description
+
+### 🟡 Warning
+- file:line — description
+
+### 🟢 Suggestion
+- file:line — description
+
+## คะแนนรวม: X/10
+PROMPT;
+
+        $review = $this->claude->chat(
+            userMessage: "Review PR diff นี้:\n\n```diff\n{$diff}\n```",
+            systemPrompt: $systemPrompt,
+        );
+
+        $this->github->postReviewComment($repo, $prNumber, $this->formatComment($review));
+    }
+
+    private function formatComment(string $review): string
+    {
+        return "## 🤖 AI Code Review\n\n{$review}\n\n---\n*Reviewed by ThaiDevDocs AI Bot*";
+    }
+}
+```
+
+---
+
+## Background Job
+
+```php
+// app/Jobs/ReviewPullRequestJob.php
+class ReviewPullRequestJob implements ShouldQueue
+{
+    public int $tries = 2;
+    public int $timeout = 120;
+
+    public function __construct(
+        public string $repo,
+        public int $prNumber,
+    ) {}
+
+    public function handle(AiCodeReviewService $reviewer): void
+    {
+        $reviewer->review($this->repo, $this->prNumber);
+    }
+}
+```
+
+---
+
+## GitHub Actions Alternative
+
+```yaml
+# .github/workflows/ai-review.yml
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get diff
+        id: diff
+        run: echo "diff<<EOF" >> $GITHUB_OUTPUT && git diff origin/${{ github.base_ref }}...HEAD >> $GITHUB_OUTPUT && echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: AI Review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          curl -X POST https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d @- << EOF
+          {
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 4096,
+            "messages": [{"role": "user", "content": "Review this diff: ${{ steps.diff.outputs.diff }}"}]
+          }
+          EOF
+```
+
+---
+
+## Review Guidelines Config
+
+```php
+// config/code-review.php
+return [
+    'enabled_repos' => ['org/repo-name'],
+    'max_diff_size' => 50000,
+    'focus_areas' => [
+        'security',
+        'performance',
+        'laravel-conventions',
+    ],
+    'ignore_patterns' => [
+        '*.lock',
+        'public/build/*',
+        'vendor/*',
+    ],
+];
+```
+
+<Callout type="tip">
+Filter diff ให้ review เฉพาะ PHP/Vue files — ข้าม lock files และ compiled assets
+</Callout>
+
+---
+
+## สรุป
+
+| Component | หน้าที่ |
+|---|---|
+| GitHub Webhook | Trigger เมื่อ PR update |
+| GitHubService | Fetch diff + post comment |
+| AiCodeReviewService | Claude analysis |
+| ReviewPullRequestJob | Async processing |
+| Config | Repo whitelist + focus areas |

@@ -1,0 +1,216 @@
+---
+title: "Environment Management สำหรับ Laravel"
+description: "จัดการ .env secrets config caching และ multi-environment setup สำหรับ dev staging production"
+topic: devops
+subtopic: configuration
+tags:
+  - environment
+  - env
+  - secrets
+  - config
+  - deployment
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 12
+is_premium: false
+---
+
+## Environment Management คืออะไร?
+
+การจัดการ config ข้าม environments (local, staging, production) อย่างปลอดภัย — ไม่ leak secrets และ behavior ตรงกัน
+
+---
+
+## .env Structure
+
+```bash
+# .env.example — commit นี้ ไม่ commit .env
+APP_NAME=Laravel
+APP_ENV=local
+APP_KEY=
+APP_DEBUG=true
+APP_URL=http://localhost
+
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=laravel
+DB_USERNAME=root
+DB_PASSWORD=
+
+# Third-party (ใส่ placeholder)
+OMISE_SECRET_KEY=
+LINE_CHANNEL_SECRET=
+ANTHROPIC_API_KEY=
+```
+
+<Callout type="warning">
+**ห้าม** commit `.env` ลง git — ใส่ใน `.gitignore` เสมอ ใช้ `.env.example` เป็น template
+</Callout>
+
+---
+
+## Config Files Pattern
+
+```php
+// config/services.php — อ่านจาก env ที่เดียว
+return [
+    'omise' => [
+        'secret_key' => env('OMISE_SECRET_KEY'),
+        'public_key' => env('OMISE_PUBLIC_KEY'),
+    ],
+    'line' => [
+        'channel_secret' => env('LINE_CHANNEL_SECRET'),
+        'channel_token'  => env('LINE_CHANNEL_TOKEN'),
+    ],
+];
+```
+
+```php
+// ❌ อย่าเรียก env() ใน code — ใช้ config() แทน
+$secret = env('OMISE_SECRET_KEY');
+
+// ✅
+$secret = config('services.omise.secret_key');
+```
+
+---
+
+## Multi-Environment Setup
+
+```
+.env                 → local (default)
+.env.testing         → PHPUnit/Pest
+.env.staging         → staging server
+.env.production      → production (ไม่ commit)
+```
+
+```bash
+# Staging server
+APP_ENV=staging
+APP_DEBUG=true   # เปิดได้ใน staging
+LOG_LEVEL=debug
+
+# Production server
+APP_ENV=production
+APP_DEBUG=false  # ห้ามเปิด!
+LOG_LEVEL=error
+```
+
+---
+
+## Config Caching (Production)
+
+```bash
+# Deploy script
+php artisan config:cache   # รวม config เป็นไฟล์เดียว — เร็วขึ้น
+php artisan route:cache
+php artisan view:cache
+php artisan event:cache
+
+# Clear เมื่อ debug
+php artisan config:clear
+php artisan optimize:clear
+```
+
+<Callout type="info">
+หลัง `config:cache` การเปลี่ยน `.env` ไม่มีผลจนกว่าจะ `config:clear` หรือ cache ใหม่
+</Callout>
+
+---
+
+## Secrets Management
+
+### Laravel Forge / Envoyer
+จัดการ env ผ่าน UI — ไม่ต้อง SSH แก้ `.env`
+
+### AWS Secrets Manager
+
+```php
+// อ่าน secret ตอน boot (ใช้ package เช่น aws-sdk)
+$secrets = json_decode(
+    SecretsManagerClient::getSecretValue(['SecretId' => 'prod/laravel'])['SecretString'],
+    true
+);
+```
+
+### GitHub Actions
+
+```yaml
+env:
+  APP_KEY: ${{ secrets.APP_KEY }}
+  DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+```
+
+---
+
+## Feature Flags
+
+```php
+// config/features.php
+return [
+    'new_checkout' => env('FEATURE_NEW_CHECKOUT', false),
+    'ai_chat'      => env('FEATURE_AI_CHAT', false),
+];
+
+// Usage
+if (config('features.new_checkout')) {
+    return view('checkout.v2');
+}
+```
+
+```bash
+# เปิด feature ใน staging
+FEATURE_NEW_CHECKOUT=true
+```
+
+---
+
+## Validation Script
+
+```bash
+#!/bin/bash
+# scripts/check-env.sh
+required_vars=(
+  "APP_KEY"
+  "DB_HOST"
+  "DB_DATABASE"
+  "REDIS_HOST"
+)
+
+for var in "${required_vars[@]}"; do
+  if [ -z "${!var}" ]; then
+    echo "ERROR: $var is not set"
+    exit 1
+  fi
+done
+echo "All required env vars are set"
+```
+
+---
+
+## APP_KEY Security
+
+```bash
+# Generate key
+php artisan key:generate
+
+# ห้าม reuse key ข้าม environments
+# ห้าม commit APP_KEY ลง git
+```
+
+---
+
+## สรุป
+
+| Practice | ทำไม |
+|---|---|
+| `.env.example` | Document required vars |
+| `config()` not `env()` | ทำงานกับ config:cache |
+| `config:cache` production | Performance |
+| `APP_DEBUG=false` prod | Security |
+| Secrets manager | ไม่เก็บ secrets ใน repo |
+| Feature flags | Toggle โดยไม่ deploy |

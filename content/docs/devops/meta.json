@@ -1,4 +1,16 @@
 {
   "title": "DevOps",
-  "pages": ["index"]
+  "pages": [
+    "index",
+    "docker-laravel",
+    "docker-compose",
+    "github-actions-laravel",
+    "azure-devops-pipeline",
+    "laravel-forge",
+    "nginx-laravel",
+    "mysql-optimization",
+    "redis-laravel",
+    "env-management",
+    "laravel-monitoring"
+  ]
 }

@@ -13,6 +13,11 @@ export function baseOptions(): BaseLayoutProps {
         on: 'nav',
       },
       {
+        text: 'Pricing',
+        url: '/pricing',
+        on: 'nav',
+      },
+      {
         text: 'Login',
         url: '/login',
         on: 'nav',

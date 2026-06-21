@@ -1,0 +1,275 @@
+---
+title: "Prompt Engineering สำหรับ Laravel Apps"
+description: "เทคนิคเขียน system prompt few-shot examples structured output และ prompt templates ใน Laravel production"
+topic: ai
+subtopic: prompting
+tags:
+  - prompt-engineering
+  - llm
+  - templates
+  - structured-output
+  - laravel
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 13
+is_premium: false
+---
+
+## Prompt Engineering คืออะไร?
+
+**Prompt Engineering** คือการออกแบบ input ให้ LLM ตอบได้แม่นยำ สม่ำเสมอ และปลอดภัย — สำคัญกว่า model choice ในหลาย use case
+
+---
+
+## System Prompt Structure
+
+```
+Role + Context + Rules + Output Format + Examples
+```
+
+```php
+// app/Prompts/QaSystemPrompt.php
+class QaSystemPrompt
+{
+    public static function build(): string
+    {
+        return <<<'PROMPT'
+# Role
+คุณเป็นผู้ช่วย Q&A ของ ThaiDevDocs แพลตฟอร์ม docs Laravel/Vue ภาษาไทย
+
+# Context
+- ตอบจาก context ที่ให้เท่านั้น
+- ถ้าไม่มีข้อมูลใน context ให้ตอบว่า "ไม่พบข้อมูลใน docs"
+
+# Rules
+1. ตอบเป็นภาษาไทย กระชับ ชัดเจน
+2. ใส่ code example เมื่อเกี่ยวกับ programming
+3. อ้างอิง source ด้วย [1], [2]
+4. ห้ามสร้างข้อมูลที่ไม่มีใน context
+5. ห้ามตอบเรื่อง politics, religion
+
+# Output Format
+- ใช้ Markdown
+- Code block ระบุ language
+- สรุปท้าย 1-2 ประโยคถ้าคำตอบยาว
+PROMPT;
+    }
+}
+```
+
+---
+
+## Prompt Template Service
+
+```php
+// app/Services/PromptService.php
+class PromptService
+{
+    public function render(string $template, array $variables): string
+    {
+        $prompt = file_get_contents(resource_path("prompts/{$template}.md"));
+
+        foreach ($variables as $key => $value) {
+            $prompt = str_replace("{{{$key}}}", $value, $prompt);
+        }
+
+        return $prompt;
+    }
+}
+```
+
+```markdown
+{{-- resources/prompts/code-review.md --}}
+Review code diff นี้สำหรับ {{language}} project
+
+Focus areas: {{focus_areas}}
+
+```diff
+{{diff}}
+```
+
+ตอบเป็น JSON format ตาม schema ที่กำหนด
+```
+
+```php
+$prompt = $promptService->render('code-review', [
+    'language'    => 'Laravel/PHP',
+    'focus_areas' => 'security, N+1 queries',
+    'diff'        => $prDiff,
+]);
+```
+
+---
+
+## Few-Shot Examples
+
+```php
+public function classifyIntent(string $message): string
+{
+    $systemPrompt = <<<'PROMPT'
+จำแนก intent ของ user message เป็นหนึ่งใน: question, feedback, complaint, greeting
+
+ตัวอย่าง:
+User: "Eager loading ใช้ยังไง"
+Intent: question
+
+User: "ระบบช้ามาก แก้ด้วย"
+Intent: complaint
+
+User: "สวัสดีครับ"
+Intent: greeting
+
+User: "docs ดีมาก ขอบคุณ"
+Intent: feedback
+
+ตอบ intent เท่านั้น ไม่ต้องอธิบาย
+PROMPT;
+
+    return $this->claude->chat($message, $systemPrompt);
+}
+```
+
+<Callout type="tip">
+Few-shot 2-5 examples เพียงพอ — มากเกินไปใช้ tokens โดยไม่จำเป็น
+</Callout>
+
+---
+
+## Structured Output (JSON)
+
+```php
+public function extractOrderInfo(string $message): array
+{
+    $systemPrompt = <<<'PROMPT'
+Extract order information จากข้อความ user
+ตอบเป็น JSON เท่านั้น ไม่มี text อื่น:
+
+{
+  "product": "string | null",
+  "quantity": "number | null",
+  "shipping_address": "string | null",
+  "confidence": "high | medium | low"
+}
+PROMPT;
+
+    $response = $this->claude->chat($message, $systemPrompt);
+
+    return json_decode($response, true) ?? [];
+}
+```
+
+---
+
+## Chain of Thought
+
+```php
+$systemPrompt = <<<'PROMPT'
+วิเคราะห์ปัญหา performance ทีละขั้น:
+
+1. ระบุ symptom จากคำถาม
+2. ระบุ possible causes (เรียงตามความน่าจะเป็น)
+3. แนะนำวิธี diagnose
+4. แนะนำวิธีแก้พร้อม code example
+
+แสดง reasoning แต่ละขั้นก่อนสรุปคำตอบ
+PROMPT;
+```
+
+---
+
+## Prompt Versioning
+
+```php
+// app/Models/PromptTemplate.php
+Schema::create('prompt_templates', function (Blueprint $table) {
+    $table->id();
+    $table->string('name');        // 'qa-system', 'code-review'
+    $table->integer('version');
+    $table->text('content');
+    $table->json('metadata')->nullable();
+    $table->boolean('is_active')->default(false);
+    $table->timestamps();
+});
+
+// Usage
+$prompt = PromptTemplate::where('name', 'qa-system')
+    ->where('is_active', true)
+    ->first()
+    ->content;
+```
+
+---
+
+## Safety & Guardrails
+
+```php
+public function sanitizeInput(string $input): string
+{
+    // จำกัด length
+    $input = mb_substr($input, 0, 2000);
+
+    // Block prompt injection patterns
+    $blocked = ['ignore previous', 'system prompt', 'you are now'];
+    foreach ($blocked as $pattern) {
+        if (stripos($input, $pattern) !== false) {
+            throw new InvalidArgumentException('Invalid input detected');
+        }
+    }
+
+    return $input;
+}
+
+public function validateOutput(string $output): string
+{
+    // ตรวจว่า output ไม่มี sensitive data
+    if (preg_match('/sk-ant-|sk-[a-zA-Z0-9]{20,}/', $output)) {
+        Log::warning('AI output contained potential API key');
+        return 'เกิดข้อผิดพลาด กรุณาลองใหม่';
+    }
+
+    return $output;
+}
+```
+
+<Callout type="warning">
+อย่า trust LLM output โดยตรง — validate JSON schema, sanitize HTML, และ filter sensitive data ก่อนส่งให้ user
+</Callout>
+
+---
+
+## A/B Testing Prompts
+
+```php
+public function getPrompt(string $name): string
+{
+    $variant = Cache::remember("prompt:variant:{$name}", 3600, function () {
+        return rand(0, 1) === 0 ? 'v1' : 'v2';
+    });
+
+    return PromptTemplate::where('name', "{$name}-{$variant}")
+        ->where('is_active', true)
+        ->value('content');
+}
+
+// Log which variant was used for analytics
+AiQuery::create([
+    'prompt_variant' => $variant,
+    'user_rating'    => null, // collect via feedback UI
+]);
+```
+
+---
+
+## สรุป
+
+| Technique | ใช้เมื่อ |
+|---|---|
+| System prompt structure | ทุก use case |
+| Few-shot examples | Classification, formatting |
+| Structured JSON output | Data extraction |
+| Chain of thought | Complex reasoning |
+| Prompt versioning | Production iteration |
+| Input/output guardrails | Security |

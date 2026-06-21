@@ -1,0 +1,232 @@
+---
+title: "Azure DevOps Pipeline สำหรับ Laravel"
+description: "สร้าง CI/CD pipeline บน Azure DevOps สำหรับ Laravel ทดสอบ build Docker image และ deploy ไป Azure App Service"
+topic: devops
+subtopic: ci-cd
+tags:
+  - azure-devops
+  - pipeline
+  - laravel
+  - ci-cd
+  - app-service
+difficulty: advanced
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 14
+is_premium: false
+---
+
+## Azure DevOps + Laravel
+
+Azure DevOps Pipelines รองรับ YAML-based CI/CD — เหมาะกับองค์กรที่ใช้ Microsoft ecosystem หรือ deploy ไป Azure
+
+---
+
+## azure-pipelines.yml — Test Stage
+
+```yaml
+# azure-pipelines.yml
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  phpVersion: '8.3'
+
+stages:
+  - stage: Test
+    jobs:
+      - job: PHPUnit
+        services:
+          mysql:
+            image: mysql:8.0
+            env:
+              MYSQL_ROOT_PASSWORD: password
+              MYSQL_DATABASE: testing
+            ports:
+              - 3306:3306
+
+        steps:
+          - checkout: self
+
+          - script: |
+              sudo update-alternatives --set php /usr/bin/php$(phpVersion)
+              sudo apt-get install -y php$(phpVersion)-mysql php$(phpVersion)-redis
+            displayName: 'Setup PHP'
+
+          - script: composer install --prefer-dist --no-interaction
+            displayName: 'Composer Install'
+
+          - script: |
+              cp .env.testing .env
+              php artisan key:generate
+              php artisan migrate --force
+            displayName: 'Prepare Laravel'
+            env:
+              DB_HOST: 127.0.0.1
+              DB_DATABASE: testing
+              DB_USERNAME: root
+              DB_PASSWORD: password
+
+          - script: ./vendor/bin/pest --parallel
+            displayName: 'Run Tests'
+
+          - script: ./vendor/bin/pint --test
+            displayName: 'Code Style Check'
+```
+
+---
+
+## Build & Push Docker Image
+
+```yaml
+  - stage: Build
+    dependsOn: Test
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: Docker
+        steps:
+          - checkout: self
+
+          - task: Docker@2
+            displayName: 'Build and Push'
+            inputs:
+              containerRegistry: '$(dockerRegistryServiceConnection)'
+              repository: 'laravel-app'
+              command: 'buildAndPush'
+              Dockerfile: 'Dockerfile'
+              tags: |
+                $(Build.BuildId)
+                latest
+```
+
+---
+
+## Deploy to Azure App Service
+
+```yaml
+  - stage: Deploy
+    dependsOn: Build
+    jobs:
+      - deployment: Production
+        environment: 'production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureWebAppContainer@1
+                  inputs:
+                    azureSubscription: '$(azureSubscription)'
+                    appName: 'my-laravel-app'
+                    containers: '$(containerRegistry)/laravel-app:$(Build.BuildId)'
+
+                - task: AzureCLI@2
+                  inputs:
+                    azureSubscription: '$(azureSubscription)'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      az webapp config appsettings set \
+                        --name my-laravel-app \
+                        --resource-group my-rg \
+                        --settings APP_KEY="$(APP_KEY)" DB_HOST="$(DB_HOST)"
+```
+
+---
+
+## Variable Groups
+
+สร้าง Variable Group ใน Azure DevOps Library:
+
+```
+APP_KEY          (secret)
+DB_HOST          mysql-server.mysql.database.azure.com
+DB_PASSWORD      (secret)
+REDIS_HOST       redis-cache.redis.cache.windows.net
+```
+
+```yaml
+variables:
+  - group: laravel-production
+```
+
+<Callout type="warning">
+Link Variable Group กับ Environment เพื่อ approval gate ก่อน deploy production
+</Callout>
+
+---
+
+## Multi-environment Pipeline
+
+```yaml
+stages:
+  - stage: DeployStaging
+    jobs:
+      - deployment: Staging
+        environment: 'staging'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - script: echo "Deploy to staging"
+
+  - stage: DeployProduction
+    dependsOn: DeployStaging
+    jobs:
+      - deployment: Production
+        environment: 'production'  # ต้อง approve manual
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - script: echo "Deploy to production"
+```
+
+---
+
+## Cache Dependencies
+
+```yaml
+          - task: Cache@2
+            inputs:
+              key: 'composer | "$(Agent.OS)" | composer.lock'
+              path: vendor
+              restoreKeys: |
+                composer | "$(Agent.OS)"
+
+          - script: composer install --prefer-dist
+            condition: ne(variables.CACHE_RESTORED, 'true')
+```
+
+---
+
+## Scheduled Pipeline (Nightly Tests)
+
+```yaml
+schedules:
+  - cron: '0 2 * * *'
+    displayName: Nightly build
+    branches:
+      include:
+        - main
+    always: true
+```
+
+---
+
+## สรุป
+
+| Stage | Azure Task |
+|---|---|
+| Test | Script + MySQL service |
+| Build | Docker@2 buildAndPush |
+| Deploy | AzureWebAppContainer@1 |
+| Secrets | Variable Groups + Key Vault |
+| Approval | Environment gates |

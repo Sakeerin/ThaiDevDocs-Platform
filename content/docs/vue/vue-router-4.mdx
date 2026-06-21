@@ -1,0 +1,271 @@
+---
+title: "Vue Router 4 — Routing ใน Vue 3"
+description: "ตั้งค่า Vue Router 4 navigation guards nested routes lazy loading และ integration กับ Pinia auth"
+topic: vue
+subtopic: routing
+tags:
+  - vue-router
+  - navigation
+  - guards
+  - lazy-loading
+  - spa
+difficulty: intermediate
+vue_version: "3.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 13
+is_premium: false
+---
+
+## Vue Router 4 คืออะไร?
+
+**Vue Router** เป็น official routing library สำหรับ Vue SPA — จัดการ URL, navigation, route params และ guards
+
+---
+
+## ติดตั้งและ Setup
+
+```bash
+npm install vue-router@4
+```
+
+```typescript
+// router/index.ts
+import { createRouter, createWebHistory } from 'vue-router'
+import type { RouteRecordRaw } from 'vue-router'
+
+const routes: RouteRecordRaw[] = [
+  {
+    path: '/',
+    component: () => import('@/layouts/DefaultLayout.vue'),
+    children: [
+      { path: '', name: 'home', component: () => import('@/views/HomeView.vue') },
+      { path: 'products', name: 'products.index', component: () => import('@/views/products/IndexView.vue') },
+      { path: 'products/:id', name: 'products.show', component: () => import('@/views/products/ShowView.vue'), props: true },
+    ],
+  },
+  {
+    path: '/login',
+    name: 'login',
+    component: () => import('@/views/auth/LoginView.vue'),
+    meta: { guest: true },
+  },
+  {
+    path: '/dashboard',
+    name: 'dashboard',
+    component: () => import('@/views/DashboardView.vue'),
+    meta: { requiresAuth: true },
+  },
+]
+
+export const router = createRouter({
+  history: createWebHistory(import.meta.env.BASE_URL),
+  routes,
+  scrollBehavior(to, from, savedPosition) {
+    return savedPosition ?? { top: 0 }
+  },
+})
+```
+
+```typescript
+// main.ts
+import { router } from './router'
+app.use(router)
+```
+
+---
+
+## Navigation ใน Component
+
+```vue
+<script setup lang="ts">
+import { useRouter, useRoute } from 'vue-router'
+
+const router = useRouter()
+const route = useRoute()
+
+// route.params.id — จาก /products/:id
+const productId = computed(() => Number(route.params.id))
+
+function goToProducts() {
+  router.push({ name: 'products.index', query: { category: 'electronics' } })
+}
+
+function goBack() {
+  router.back()
+}
+</script>
+
+<template>
+  <RouterLink :to="{ name: 'products.show', params: { id: 1 } }">
+    ดูสินค้า
+  </RouterLink>
+  <RouterLink
+    :to="{ name: 'products.index' }"
+    active-class="text-primary"
+    exact-active-class="font-bold"
+  >
+    สินค้าทั้งหมด
+  </RouterLink>
+</template>
+```
+
+---
+
+## Navigation Guards
+
+```typescript
+// router/index.ts
+import { useAuthStore } from '@/stores/auth'
+
+router.beforeEach(async (to, from, next) => {
+  const auth = useAuthStore()
+
+  if (to.meta.requiresAuth && !auth.isAuthenticated) {
+    return next({ name: 'login', query: { redirect: to.fullPath } })
+  }
+
+  if (to.meta.guest && auth.isAuthenticated) {
+    return next({ name: 'dashboard' })
+  }
+
+  next()
+})
+
+router.afterEach((to) => {
+  document.title = `${to.meta.title ?? 'App'} | ThaiDevDocs Shop`
+})
+```
+
+### Per-route Guard
+
+```typescript
+{
+  path: '/admin',
+  component: AdminLayout,
+  beforeEnter: (to, from) => {
+    const auth = useAuthStore()
+    if (!auth.user?.isAdmin) return { name: 'home' }
+  },
+}
+```
+
+---
+
+## Nested Routes + Named Views
+
+```typescript
+{
+  path: '/settings',
+  component: SettingsLayout,
+  children: [
+    { path: 'profile', component: ProfileSettings },
+    { path: 'billing', component: BillingSettings },
+    { path: 'security', component: SecuritySettings },
+  ],
+}
+```
+
+```vue
+<!-- SettingsLayout.vue -->
+<template>
+  <div class="flex">
+    <SettingsSidebar />
+    <main>
+      <RouterView />  <!-- child route render ที่นี่ -->
+    </main>
+  </div>
+</template>
+```
+
+---
+
+## Lazy Loading Routes
+
+```typescript
+// ✅ แนะนำ — code splitting อัตโนมัติ
+const routes = [
+  {
+    path: '/reports',
+    component: () => import('@/views/ReportsView.vue'),
+  },
+]
+```
+
+<Callout type="tip">
+Group routes ที่เกี่ยวข้องด้วย webpack magic comment (Vite รองรับ) — `import(/* webpackChunkName: "admin" */ '@/views/Admin.vue')`
+</Callout>
+
+---
+
+## Route Meta Types
+
+```typescript
+// router/types.ts
+import 'vue-router'
+
+declare module 'vue-router' {
+  interface RouteMeta {
+    requiresAuth?: boolean
+    guest?: boolean
+    title?: string
+    roles?: string[]
+  }
+}
+```
+
+---
+
+## 404 Catch-all
+
+```typescript
+{
+  path: '/:pathMatch(.*)*',
+  name: 'not-found',
+  component: () => import('@/views/NotFoundView.vue'),
+}
+```
+
+---
+
+## Integration กับ Laravel API
+
+```typescript
+// composables/useRouteQuery.ts
+import { useRoute, useRouter } from 'vue-router'
+
+export function useRouteQuery<T extends string>(key: string, defaultValue: T) {
+  const route = useRoute()
+  const router = useRouter()
+
+  const value = computed({
+    get: () => (route.query[key] as T) ?? defaultValue,
+    set: (val) => router.replace({ query: { ...route.query, [key]: val } }),
+  })
+
+  return value
+}
+```
+
+```vue
+<script setup lang="ts">
+const search = useRouteQuery('search', '')
+const page = useRouteQuery('page', '1')
+
+watch([search, page], () => fetchProducts())
+</script>
+```
+
+---
+
+## สรุป
+
+| Feature | API |
+|---|---|
+| Programmatic nav | `router.push()`, `router.replace()` |
+| Current route | `useRoute()` |
+| Auth guard | `beforeEach` + `meta.requiresAuth` |
+| Lazy load | `() => import('...')` |
+| Props from params | `props: true` ใน route config |
+| Query sync | `useRouteQuery` composable |

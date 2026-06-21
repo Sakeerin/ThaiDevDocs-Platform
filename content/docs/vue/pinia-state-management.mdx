@@ -1,0 +1,278 @@
+---
+title: "Pinia State Management ใน Vue 3"
+description: "ตั้งค่า Pinia store จัดการ global state actions getters และ integration กับ Composition API พร้อมตัวอย่าง cart และ auth"
+topic: vue
+subtopic: state-management
+tags:
+  - pinia
+  - state-management
+  - store
+  - vue3
+difficulty: intermediate
+vue_version: "3.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 13
+is_premium: false
+---
+
+## Pinia คืออะไร?
+
+**Pinia** คือ official state management library ของ Vue 3 แทน Vuex ออกแบบมาให้ TypeScript-friendly, มี DevTools support และ API ที่เรียบง่ายกว่า
+
+<Callout type="info">
+Pinia เป็น default ใน Vue ecosystem ตั้งแต่ Vue 3.2+ — ถ้าเริ่มโปรเจกต์ใหม่ใช้ Pinia แทน Vuex ได้เลย
+</Callout>
+
+---
+
+## ติดตั้งและ Setup
+
+```bash
+npm install pinia
+```
+
+```typescript
+// main.ts
+import { createApp } from 'vue'
+import { createPinia } from 'pinia'
+import App from './App.vue'
+
+const app = createApp(App)
+app.use(createPinia())
+app.mount('#app')
+```
+
+---
+
+## สร้าง Store พื้นฐาน
+
+```typescript
+// stores/counter.ts
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+
+export const useCounterStore = defineStore('counter', () => {
+  const count = ref(0)
+  const doubleCount = computed(() => count.value * 2)
+
+  function increment() {
+    count.value++
+  }
+
+  function reset() {
+    count.value = 0
+  }
+
+  return { count, doubleCount, increment, reset }
+})
+```
+
+### ใช้งานใน Component
+
+```vue
+<script setup lang="ts">
+import { storeToRefs } from 'pinia'
+import { useCounterStore } from '@/stores/counter'
+
+const store = useCounterStore()
+
+// destructuring ด้วย storeToRefs — รักษา reactivity
+const { count, doubleCount } = storeToRefs(store)
+// actions เรียกตรงๆ ได้ ไม่ต้อง toRefs
+const { increment } = store
+</script>
+
+<template>
+  <p>Count: {{ count }} (x2 = {{ doubleCount }})</p>
+  <button @click="increment">+1</button>
+</template>
+```
+
+---
+
+## ตัวอย่างจริง: Cart Store
+
+```typescript
+// stores/cart.ts
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+
+interface CartItem {
+  id: number
+  name: string
+  price: number
+  quantity: number
+}
+
+export const useCartStore = defineStore('cart', () => {
+  const items = ref<CartItem[]>([])
+
+  const itemCount = computed(() =>
+    items.value.reduce((sum, item) => sum + item.quantity, 0)
+  )
+
+  const totalPrice = computed(() =>
+    items.value.reduce((sum, item) => sum + item.price * item.quantity, 0)
+  )
+
+  function addItem(product: Omit<CartItem, 'quantity'>) {
+    const existing = items.value.find(i => i.id === product.id)
+    if (existing) {
+      existing.quantity++
+    } else {
+      items.value.push({ ...product, quantity: 1 })
+    }
+  }
+
+  function removeItem(id: number) {
+    items.value = items.value.filter(i => i.id !== id)
+  }
+
+  function clearCart() {
+    items.value = []
+  }
+
+  return { items, itemCount, totalPrice, addItem, removeItem, clearCart }
+})
+```
+
+---
+
+## Auth Store + API Integration
+
+```typescript
+// stores/auth.ts
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+import { api } from '@/lib/api'
+
+interface User {
+  id: number
+  name: string
+  email: string
+}
+
+export const useAuthStore = defineStore('auth', () => {
+  const user = ref<User | null>(null)
+  const token = ref<string | null>(localStorage.getItem('token'))
+  const loading = ref(false)
+
+  const isAuthenticated = computed(() => !!token.value)
+
+  async function login(email: string, password: string) {
+    loading.value = true
+    try {
+      const { data } = await api.post('/login', { email, password })
+      token.value = data.token
+      user.value = data.user
+      localStorage.setItem('token', data.token)
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function logout() {
+    await api.post('/logout')
+    token.value = null
+    user.value = null
+    localStorage.removeItem('token')
+  }
+
+  return { user, token, loading, isAuthenticated, login, logout }
+})
+```
+
+---
+
+## Store ข้าม Store (Composition)
+
+```typescript
+// stores/checkout.ts
+import { defineStore } from 'pinia'
+import { useCartStore } from './cart'
+import { useAuthStore } from './auth'
+
+export const useCheckoutStore = defineStore('checkout', () => {
+  async function placeOrder(shippingAddress: string) {
+    const cart = useCartStore()
+    const auth = useAuthStore()
+
+    if (!auth.isAuthenticated) throw new Error('กรุณา login ก่อน')
+
+    return api.post('/orders', {
+      items: cart.items,
+      shipping_address: shippingAddress,
+    })
+  }
+
+  return { placeOrder }
+})
+```
+
+---
+
+## Persistence ด้วย pinia-plugin-persistedstate
+
+```bash
+npm install pinia-plugin-persistedstate
+```
+
+```typescript
+// main.ts
+import piniaPluginPersistedstate from 'pinia-plugin-persistedstate'
+
+const pinia = createPinia()
+pinia.use(piniaPluginPersistedstate)
+```
+
+```typescript
+// stores/cart.ts — เพิ่ม persist config
+export const useCartStore = defineStore('cart', () => {
+  // ... store logic
+}, {
+  persist: {
+    key: 'cart',
+    storage: localStorage,
+    paths: ['items'], // persist เฉพาะ items
+  },
+})
+```
+
+<Callout type="warning">
+อย่า persist sensitive data เช่น token ใน localStorage โดยไม่เข้ารหัส — ใช้ httpOnly cookie จาก backend แทนสำหรับ production
+</Callout>
+
+---
+
+## Options API Style (Alternative)
+
+```typescript
+export const useSettingsStore = defineStore('settings', {
+  state: () => ({
+    theme: 'light' as 'light' | 'dark',
+    locale: 'th',
+  }),
+  getters: {
+    isDark: (state) => state.theme === 'dark',
+  },
+  actions: {
+    toggleTheme() {
+      this.theme = this.theme === 'light' ? 'dark' : 'light'
+    },
+  },
+})
+```
+
+---
+
+## สรุป
+
+| Pattern | ใช้เมื่อ |
+|---|---|
+| Setup Store (`() => {}`) | โปรเจกต์ Vue 3 + TypeScript (แนะนำ) |
+| Options Store | Migrate จาก Vuex หรือ team คุ้น Options API |
+| `storeToRefs()` | Destructure state/getters ใน component |
+| Plugin persist | เก็บ cart, settings ข้าม session |
+| Cross-store | Checkout, notification ที่ใช้หลาย store |

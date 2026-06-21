@@ -1,0 +1,6 @@
+/apps/api/vendor
+/apps/api/.env
+/apps/api/.env.backup
+/apps/api/database/database.sqlite
+/apps/api/storage/logs
+/apps/api/bootstrap/cache/*.php

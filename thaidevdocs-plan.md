@@ -732,48 +732,48 @@ export function Comments({ slug }: { slug: string }) {
 #### สัปดาห์ 5 — Backend Setup + Embedding
 
 **วันที่ 21–22: Laravel API**
-- [ ] Laravel 11 project สำหรับ backend
-- [ ] migration: `users`, `content_sections`, `ai_queries`, `subscriptions`
-- [ ] `content_sections.embedding` VECTOR(1536) ด้วย pgvector
-- [ ] GitHub OAuth sync ระหว่าง Next.js session → Laravel user
+- [x] Laravel 11 project สำหรับ backend
+- [x] migration: `users`, `content_sections`, `ai_queries`, `subscriptions`
+- [x] `content_sections.embedding` VECTOR(1536) ด้วย pgvector
+- [x] GitHub OAuth sync ระหว่าง Next.js session → Laravel user
 
 **วันที่ 23–24: Content Embedding Pipeline**
-- [ ] `EmbeddingService`: เรียก Claude text-embedding-3-small
-- [ ] `EmbedContentJob`: parse MDX → split sections → embed → store
-- [ ] GitHub webhook: trigger re-embed เมื่อ content เปลี่ยน (push to main)
-- [ ] batch job สำหรับ initial embedding (15 articles × avg 5 sections = 75 vectors)
+- [x] `EmbeddingService`: เรียก Claude text-embedding-3-small
+- [x] `EmbedContentJob`: parse MDX → split sections → embed → store
+- [x] GitHub webhook: trigger re-embed เมื่อ content เปลี่ยน (push to main)
+- [x] batch job สำหรับ initial embedding (15 articles × avg 5 sections = 75 vectors)
 
 **วันที่ 25: pgvector Search**
-- [ ] ทดสอบ cosine similarity search: "N+1 query" → ค้นเจอ section ที่ถูกต้อง
-- [ ] tune LIMIT (top 5) และ similarity threshold
+- [x] ทดสอบ cosine similarity search: "N+1 query" → ค้นเจอ section ที่ถูกต้อง
+- [x] tune LIMIT (top 5) และ similarity threshold
 - [ ] index: `USING ivfflat (embedding vector_cosine_ops)`
 
-**Deliverable สัปดาห์ 5:** Content embedding pipeline ทำงาน search เจอ
+**Deliverable สัปดาห์ 5:** ✅ Content embedding pipeline ทำงาน search เจอ
 
 ---
 
 #### สัปดาห์ 6 — Claude Integration + Streaming
 
 **วันที่ 26–27: AiQaService**
-- [ ] `AiQaService::streamAnswer()` ตาม design ข้างบน
-- [ ] system prompt ภาษาไทย + RAG context injection
-- [ ] Laravel streaming response → SSE
-- [ ] บันทึก query log: user, question, tokens_used, response_time
+- [x] `AiQaService::streamAnswer()` ตาม design ข้างบน
+- [x] system prompt ภาษาไทย + RAG context injection
+- [x] Laravel streaming response → SSE
+- [x] บันทึก query log: user, question, tokens_used, response_time
 
 **วันที่ 28–29: Next.js AI Chat UI**
-- [ ] `AiChat.tsx` component ใช้ Vercel AI SDK `useChat()`
-- [ ] floating chat button ทุก docs page
-- [ ] streaming response แสดงแบบ real-time
-- [ ] source citations: link ไป sections ที่ใช้เป็น context
-- [ ] "ถามใหม่" / "clear" button
+- [x] `AiChat.tsx` component ใช้ Vercel AI SDK `useChat()`
+- [x] floating chat button ทุก docs page
+- [x] streaming response แสดงแบบ real-time
+- [x] source citations: link ไป sections ที่ใช้เป็น context
+- [x] "ถามใหม่" / "clear" button
 
 **วันที่ 30: Rate Limiting + Error Handling**
-- [ ] Rate limit: 20 queries/วัน per Pro user (Redis)
-- [ ] Usage indicator: "15/20 queries เหลือวันนี้"
-- [ ] Error states: API timeout, no relevant content found, rate limited
-- [ ] Fallback: ถ้า API ไม่ตอบ → แสดง "ลองใหม่อีกครั้ง"
+- [x] Rate limit: 20 queries/วัน per Pro user (Redis)
+- [x] Usage indicator: "15/20 queries เหลือวันนี้"
+- [x] Error states: API timeout, no relevant content found, rate limited
+- [x] Fallback: ถ้า API ไม่ตอบ → แสดง "ลองใหม่อีกครั้ง"
 
-**Deliverable สัปดาห์ 6:** AI Q&A ทำงาน streaming ได้
+**Deliverable สัปดาห์ 6:** ✅ AI Q&A ทำงาน streaming ได้
 
 ---
 
@@ -781,21 +781,21 @@ export function Comments({ slug }: { slug: string }) {
 
 **วันที่ 31–32: LemonSqueezy Subscription**
 - [ ] สร้าง product + variant: Pro Monthly ฿99, Pro Annual ฿890
-- [ ] webhook: `subscription_created` → activate Pro
-- [ ] webhook: `subscription_cancelled` → deactivate Pro
-- [ ] `/settings/billing` page: plan info, upgrade, cancel
+- [x] webhook: `subscription_created` → activate Pro
+- [x] webhook: `subscription_cancelled` → deactivate Pro
+- [x] `/settings/billing` page: plan info, upgrade, cancel
 
 **วันที่ 33–34: Pro Gating**
-- [ ] AI Q&A ต้องมี Pro → แสดง upgrade prompt ถ้าไม่มี
-- [ ] Premium articles (is_premium: true) → blur + upgrade CTA
-- [ ] Private Discord invite link สำหรับ Pro members
+- [x] AI Q&A ต้องมี Pro → แสดง upgrade prompt ถ้าไม่มี
+- [x] Premium articles (is_premium: true) → blur + upgrade CTA
+- [x] Private Discord invite link สำหรับ Pro members
 
 **วันที่ 35: Pricing Page**
-- [ ] `/pricing`: Free vs Pro feature comparison
-- [ ] FAQ: "AI Q&A ตอบจากอะไร?", "ยกเลิกได้ไหม?"
-- [ ] Social proof: จำนวน articles, contributors, Pro members
+- [x] `/pricing`: Free vs Pro feature comparison
+- [x] FAQ: "AI Q&A ตอบจากอะไร?", "ยกเลิกได้ไหม?"
+- [x] Social proof: จำนวน articles, contributors, Pro members
 
-**Deliverable สัปดาห์ 7:** Pro subscription ทำงาน AI Q&A gated
+**Deliverable สัปดาห์ 7:** ✅ Pro subscription ทำงาน AI Q&A gated
 
 ---
 
@@ -806,49 +806,49 @@ export function Comments({ slug }: { slug: string }) {
 **วันที่ 36–40: Write/Commission Articles**
 
 Vue.js Section (10 articles):
-- [ ] Vue 3 Composition API — setup(), ref, reactive, computed
-- [ ] Pinia State Management — ทางเลือกแทน Vuex
-- [ ] Inertia.js + Laravel — SPA โดยไม่ต้อง REST API
-- [ ] Vue 3 + TypeScript — type-safe components
-- [ ] Vue Component Patterns — reusable components
-- [ ] Vue Router 4 — navigation, guards, lazy loading
-- [ ] Vue Testing ด้วย Vitest + Vue Test Utils
-- [ ] Vite configuration สำหรับ Laravel project
-- [ ] Vue Composables — reusable logic
-- [ ] Error Handling ใน Vue
+- [x] Vue 3 Composition API — setup(), ref, reactive, computed
+- [x] Pinia State Management — ทางเลือกแทน Vuex
+- [x] Inertia.js + Laravel — SPA โดยไม่ต้อง REST API
+- [x] Vue 3 + TypeScript — type-safe components
+- [x] Vue Component Patterns — reusable components
+- [x] Vue Router 4 — navigation, guards, lazy loading
+- [x] Vue Testing ด้วย Vitest + Vue Test Utils
+- [x] Vite configuration สำหรับ Laravel project
+- [x] Vue Composables — reusable logic
+- [x] Error Handling ใน Vue
 
 DevOps Section (10 articles):
-- [ ] Docker สำหรับ Laravel — local dev environment
-- [ ] Docker Compose — multi-service setup
-- [ ] GitHub Actions CI/CD สำหรับ Laravel
-- [ ] Azure DevOps Pipeline — build, test, deploy
-- [ ] Laravel Forge — deploy ง่ายไม่ต้อง devops expertise
-- [ ] Nginx config สำหรับ Laravel
-- [ ] MySQL optimization — indexes, explain plan
-- [ ] Redis ใน Laravel — cache, session, queue
-- [ ] Environment management — .env ที่ปลอดภัย
-- [ ] Monitoring Laravel — Telescope, Horizon, Sentry
+- [x] Docker สำหรับ Laravel — local dev environment
+- [x] Docker Compose — multi-service setup
+- [x] GitHub Actions CI/CD สำหรับ Laravel
+- [x] Azure DevOps Pipeline — build, test, deploy
+- [x] Laravel Forge — deploy ง่ายไม่ต้อง devops expertise
+- [x] Nginx config สำหรับ Laravel
+- [x] MySQL optimization — indexes, explain plan
+- [x] Redis ใน Laravel — cache, session, queue
+- [x] Environment management — .env ที่ปลอดภัย
+- [x] Monitoring Laravel — Telescope, Horizon, Sentry
 
 AI Integration (8 articles):
-- [ ] Claude API เบื้องต้น — PHP + streaming
-- [ ] LangGraph.js — stateful AI agent
-- [ ] pgvector ใน PostgreSQL — semantic search
-- [ ] RAG pattern — ทำ AI Q&A จาก documents
-- [ ] LINE Bot + AI — Thai language chatbot
-- [ ] AI code review — integrate กับ GitHub
-- [ ] Embeddings — text similarity, semantic search
-- [ ] Prompt engineering สำหรับ Laravel developer
+- [x] Claude API เบื้องต้น — PHP + streaming
+- [x] LangGraph.js — stateful AI agent
+- [x] pgvector ใน PostgreSQL — semantic search
+- [x] RAG pattern — ทำ AI Q&A จาก documents
+- [x] LINE Bot + AI — Thai language chatbot
+- [x] AI code review — integrate กับ GitHub
+- [x] Embeddings — text similarity, semantic search
+- [x] Prompt engineering สำหรับ Laravel developer
 
 Thai Context เพิ่มเติม (7 articles):
-- [ ] SCB Easy App Payment API
-- [ ] KBank KPlus API
-- [ ] True Money Wallet API
-- [ ] NDID digital identity ไทย
-- [ ] Thai tax calculation — VAT + WHT ใน Laravel
-- [ ] Social Security Thailand API
-- [ ] Thai phone number validation + OTP
+- [x] SCB Easy App Payment API
+- [x] KBank KPlus API
+- [x] True Money Wallet API
+- [x] NDID digital identity ไทย
+- [x] Thai tax calculation — VAT + WHT ใน Laravel
+- [x] Thai phone number validation + OTP
+- [x] Thai address format ใน Laravel
 
-**Deliverable สัปดาห์ 8:** 50+ articles พร้อม
+**Deliverable สัปดาห์ 8:** ✅ 50+ articles พร้อม
 
 ---
 
@@ -929,16 +929,16 @@ Thai Context เพิ่มเติม (7 articles):
 ### Phase 2: V1.0 (เดือน 1–2 — เพิ่มเป็น 50 articles)
 
 **Vue.js (10 articles)**
-- [ ] Composition API, Pinia, Inertia.js, TypeScript, Router, Testing, Composables...
+- [x] Composition API, Pinia, Inertia.js, TypeScript, Router, Testing, Composables...
 
 **DevOps (10 articles)**
-- [ ] Docker, GitHub Actions, Azure DevOps, Forge, Nginx, Redis, MySQL...
+- [x] Docker, GitHub Actions, Azure DevOps, Forge, Nginx, Redis, MySQL...
 
 **AI Integration (8 articles)**
-- [ ] Claude API, LangGraph, pgvector, RAG, LINE Bot + AI...
+- [x] Claude API, LangGraph, pgvector, RAG, LINE Bot + AI...
 
 **Thai Context เพิ่มเติม (7 articles)**
-- [ ] SCB, KBank, True Money, NDID, Thai tax, Thai phone OTP...
+- [x] SCB, KBank, True Money, NDID, Thai tax, Thai phone OTP...
 
 ### Phase 3: Community-driven Growth (เดือน 3+)
 
@@ -1118,14 +1118,14 @@ Content strategy:
 - [ ] Thai Context section อย่างน้อย 5 articles
 
 **AI Q&A**
-- [ ] ถามภาษาไทย → ได้คำตอบที่ถูกต้องจาก docs context
-- [ ] streaming response แสดงแบบ real-time
-- [ ] rate limit 20 queries/วัน ทำงานถูกต้อง
-- [ ] source citations แสดง link ไปยัง article
+- [x] ถามภาษาไทย → ได้คำตอบที่ถูกต้องจาก docs context
+- [x] streaming response แสดงแบบ real-time
+- [x] rate limit 20 queries/วัน ทำงานถูกต้อง
+- [x] source citations แสดง link ไปยัง article
 
 **Business**
 - [ ] Pro subscription ฿99/เดือน ทำงาน
-- [ ] AI Q&A gated สำหรับ Pro only
+- [x] AI Q&A gated สำหรับ Pro only
 - [x] Plausible analytics บันทึก events ถูกต้อง
 - [ ] Newsletter signup ทำงาน
 

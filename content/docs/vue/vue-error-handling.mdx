@@ -1,0 +1,287 @@
+---
+title: "Vue Error Handling — จัดการ Error อย่างเป็นระบบ"
+description: "Global error handler error boundaries async error handling และ integration กับ monitoring ใน Vue 3"
+topic: vue
+subtopic: patterns
+tags:
+  - error-handling
+  - vue3
+  - monitoring
+  - async
+  - boundaries
+difficulty: intermediate
+vue_version: "3.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 12
+is_premium: false
+---
+
+## ประเภท Error ใน Vue App
+
+1. **Render errors** — template หรือ computed throw exception
+2. **Lifecycle errors** — `onMounted`, watcher ล้มเหลว
+3. **Async errors** — API call, Promise reject
+4. **Event handler errors** — click handler throw
+
+แต่ละประเภทต้องจัดการต่างกัน
+
+---
+
+## Global Error Handler
+
+```typescript
+// main.ts
+import { createApp } from 'vue'
+import App from './App.vue'
+
+const app = createApp(App)
+
+app.config.errorHandler = (err, instance, info) => {
+  console.error('Vue Error:', err)
+  console.error('Component:', instance?.$options?.name)
+  console.error('Info:', info) // e.g. "render function", "mounted hook"
+
+  // ส่งไป monitoring service
+  reportError({
+    message: err instanceof Error ? err.message : String(err),
+    stack: err instanceof Error ? err.stack : undefined,
+    component: instance?.$options?.name,
+    info,
+  })
+}
+
+app.mount('#app')
+```
+
+---
+
+## onErrorCaptured — Error Boundary
+
+```vue
+<!-- components/ErrorBoundary.vue -->
+<script setup lang="ts">
+import { ref, onErrorCaptured } from 'vue'
+
+const error = ref<Error | null>(null)
+
+onErrorCaptured((err) => {
+  error.value = err instanceof Error ? err : new Error(String(err))
+  return false // หยุด propagate ไป parent
+})
+
+function retry() {
+  error.value = null
+}
+</script>
+
+<template>
+  <div v-if="error" class="error-boundary">
+    <h3>เกิดข้อผิดพลาด</h3>
+    <p>{{ error.message }}</p>
+    <button @click="retry">ลองใหม่</button>
+  </div>
+  <slot v-else />
+</template>
+```
+
+```vue
+<!-- App.vue -->
+<template>
+  <ErrorBoundary>
+    <RouterView />
+  </ErrorBoundary>
+</template>
+```
+
+<Callout type="info">
+`onErrorCaptured` จับได้เฉพาะ child components — ไม่จับ error ใน component ตัวเอง
+</Callout>
+
+---
+
+## Async Error Handling
+
+```typescript
+// composables/useAsyncAction.ts
+import { ref } from 'vue'
+
+export function useAsyncAction<T extends (...args: any[]) => Promise<any>>(fn: T) {
+  const loading = ref(false)
+  const error = ref<Error | null>(null)
+
+  async function execute(...args: Parameters<T>): Promise<Awaited<ReturnType<T>> | null> {
+    loading.value = true
+    error.value = null
+
+    try {
+      return await fn(...args)
+    } catch (e) {
+      error.value = e instanceof Error ? e : new Error(String(e))
+      return null
+    } finally {
+      loading.value = false
+    }
+  }
+
+  return { loading, error, execute }
+}
+```
+
+```vue
+<script setup lang="ts">
+const { loading, error, execute } = useAsyncAction(submitOrder)
+
+async function handleSubmit() {
+  const result = await execute(formData)
+  if (result) router.push('/orders/success')
+}
+</script>
+
+<template>
+  <Alert v-if="error" type="error">{{ error.message }}</Alert>
+  <button :disabled="loading" @click="handleSubmit">
+    {{ loading ? 'กำลังส่ง...' : 'ยืนยันออเดอร์' }}
+  </button>
+</template>
+```
+
+---
+
+## Axios Interceptor
+
+```typescript
+// lib/api.ts
+import axios from 'axios'
+import { useAuthStore } from '@/stores/auth'
+import { router } from '@/router'
+
+const api = axios.create({
+  baseURL: import.meta.env.VITE_API_URL,
+})
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error.response?.status
+
+    if (status === 401) {
+      const auth = useAuthStore()
+      auth.logout()
+      router.push({ name: 'login' })
+    }
+
+    if (status === 422) {
+      // Validation errors — ให้ form จัดการ
+      return Promise.reject(error)
+    }
+
+    if (status >= 500) {
+      reportError({
+        message: error.message,
+        url: error.config?.url,
+        status,
+      })
+    }
+
+    return Promise.reject(error)
+  }
+)
+
+export { api }
+```
+
+---
+
+## Unhandled Promise Rejection
+
+```typescript
+// main.ts
+window.addEventListener('unhandledrejection', (event) => {
+  console.error('Unhandled Promise:', event.reason)
+  reportError({ message: String(event.reason), type: 'unhandledrejection' })
+  event.preventDefault()
+})
+```
+
+---
+
+## Form Validation Errors
+
+```vue
+<script setup lang="ts">
+import { useForm } from '@inertiajs/vue3'
+// หรือ custom form composable
+
+const form = useForm({ email: '', password: '' })
+
+function submit() {
+  form.post('/login', {
+    onError: (errors) => {
+      // errors = { email: '...', password: '...' }
+    },
+  })
+}
+</script>
+
+<template>
+  <input v-model="form.email" />
+  <span v-if="form.errors.email" class="text-red-500">
+    {{ form.errors.email }}
+  </span>
+</template>
+```
+
+---
+
+## User-friendly Error Messages
+
+```typescript
+// utils/errorMessages.ts
+const ERROR_MAP: Record<string, string> = {
+  'Network Error': 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้ กรุณาตรวจสอบอินเทอร์เน็ต',
+  'timeout': 'การเชื่อมต่อใช้เวลานานเกินไป กรุณาลองใหม่',
+}
+
+export function getUserMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  return ERROR_MAP[message] ?? 'เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง'
+}
+```
+
+<Callout type="warning">
+อย่าแสดง stack trace หรือ technical error ให้ user เห็น — log ไป server แล้วแสดงข้อความภาษาไทยที่เข้าใจง่าย
+</Callout>
+
+---
+
+## Integration กับ Sentry
+
+```bash
+npm install @sentry/vue
+```
+
+```typescript
+import * as Sentry from '@sentry/vue'
+
+Sentry.init({
+  app,
+  dsn: import.meta.env.VITE_SENTRY_DSN,
+  environment: import.meta.env.MODE,
+  integrations: [Sentry.browserTracingIntegration({ router })],
+})
+```
+
+---
+
+## สรุป
+
+| Error Type | วิธีจัดการ |
+|---|---|
+| Render/lifecycle | `app.config.errorHandler` |
+| Child component | `onErrorCaptured` + ErrorBoundary |
+| Async actions | try/catch ใน composable |
+| API errors | Axios interceptor |
+| Unhandled Promise | `unhandledrejection` listener |
+| User display | `getUserMessage()` แปลเป็นภาษาไทย |

@@ -1,0 +1,211 @@
+---
+title: "Nginx Configuration สำหรับ Laravel"
+description: "ตั้งค่า Nginx สำหรับ Laravel production รวม SSL HTTP/2 gzip caching และ security headers"
+topic: devops
+subtopic: server
+tags:
+  - nginx
+  - laravel
+  - ssl
+  - performance
+  - security
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 13
+is_premium: false
+---
+
+## Nginx + Laravel Architecture
+
+```
+Client → Nginx (port 443) → PHP-FPM (port 9000) → Laravel
+                ↓
+         Static files (/public)
+```
+
+Nginx รับ request, serve static files โดยตรง, ส่ง PHP requests ไป PHP-FPM
+
+---
+
+## Basic Site Config
+
+```nginx
+# /etc/nginx/sites-available/laravel.conf
+server {
+    listen 80;
+    server_name shop.example.com;
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name shop.example.com;
+    root /var/www/laravel/public;
+    index index.php;
+
+    # SSL
+    ssl_certificate     /etc/letsencrypt/live/shop.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/shop.example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    charset utf-8;
+
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location = /favicon.ico { access_log off; log_not_found off; }
+    location = /robots.txt  { access_log off; log_not_found off; }
+
+    error_page 404 /index.php;
+
+    location ~ \.php$ {
+        fastcgi_pass unix:/var/run/php/php8.3-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+        include fastcgi_params;
+        fastcgi_hide_header X-Powered-By;
+    }
+
+    location ~ /\.(?!well-known).* {
+        deny all;
+    }
+}
+```
+
+---
+
+## Gzip Compression
+
+```nginx
+# /etc/nginx/conf.d/gzip.conf
+gzip on;
+gzip_vary on;
+gzip_proxied any;
+gzip_comp_level 6;
+gzip_types
+    text/plain
+    text/css
+    text/javascript
+    application/json
+    application/javascript
+    application/xml
+    image/svg+xml;
+```
+
+---
+
+## Static Asset Caching
+
+```nginx
+location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+    access_log off;
+}
+
+# Vite build assets มี hash ในชื่อ — cache ได้ยาว
+location /build/ {
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+}
+```
+
+---
+
+## Rate Limiting
+
+```nginx
+# /etc/nginx/conf.d/rate-limit.conf
+limit_req_zone $binary_remote_addr zone=api:10m rate=60r/m;
+limit_req_zone $binary_remote_addr zone=login:10m rate=5r/m;
+
+# ใน server block
+location /api/ {
+    limit_req zone=api burst=20 nodelay;
+    try_files $uri $uri/ /index.php?$query_string;
+}
+
+location /login {
+    limit_req zone=login burst=3 nodelay;
+    try_files $uri $uri/ /index.php?$query_string;
+}
+```
+
+<Callout type="tip">
+Rate limit `/login` และ `/api/` ป้องกัน brute force — สำคัญสำหรับ app ไทยที่ถูก scan บ่อย
+</Callout>
+
+---
+
+## Upload Size
+
+```nginx
+client_max_body_size 20M;  # ตรงกับ PHP upload_max_filesize
+```
+
+```ini
+; php.ini
+upload_max_filesize = 20M
+post_max_size = 25M
+```
+
+---
+
+## WebSocket / Laravel Reverb
+
+```nginx
+location /app/ {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_read_timeout 86400;
+}
+```
+
+---
+
+## PHP-FPM Tuning
+
+```ini
+; /etc/php/8.3/fpm/pool.d/www.conf
+pm = dynamic
+pm.max_children = 20
+pm.start_servers = 5
+pm.min_spare_servers = 3
+pm.max_spare_servers = 10
+pm.max_requests = 500
+```
+
+---
+
+## Enable Site
+
+```bash
+sudo ln -s /etc/nginx/sites-available/laravel.conf /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+---
+
+## สรุป
+
+| Config | วัตถุประสงค์ |
+|---|---|
+| `try_files` | Laravel routing |
+| SSL + HTTP/2 | Security + performance |
+| Gzip | ลด bandwidth |
+| Static cache | เร็วขึ้นสำหรับ assets |
+| Rate limit | ป้องกัน abuse |
+| `client_max_body_size` | File upload limit |

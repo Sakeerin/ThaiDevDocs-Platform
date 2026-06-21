@@ -1,0 +1,276 @@
+---
+title: "Inertia.js + Laravel + Vue Integration"
+description: "สร้าง SPA experience ด้วย Inertia.js เชื่อม Laravel backend กับ Vue frontend โดยไม่ต้องสร้าง REST API แยก"
+topic: vue
+subtopic: laravel-integration
+tags:
+  - inertia
+  - laravel
+  - vue
+  - spa
+  - full-stack
+difficulty: intermediate
+vue_version: "3.x"
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 16
+is_premium: false
+---
+
+## Inertia.js คืออะไร?
+
+**Inertia.js** ทำให้สร้าง SPA ได้โดยใช้ classic server-side routing ของ Laravel — ไม่ต้องสร้าง REST API แยก Controller ส่ง props เป็น JSON แล้ว Vue render เป็น page
+
+<Callout type="info">
+Inertia เหมาะกับทีม full-stack ที่ใช้ Laravel + Vue — ได้ UX แบบ SPA แต่ยังใช้ Laravel validation, authorization และ session ได้เต็มที่
+</Callout>
+
+---
+
+## ติดตั้ง
+
+```bash
+# Laravel side
+composer require inertiajs/inertia-laravel
+php artisan inertia:middleware
+php artisan inertia:install vue
+```
+
+```bash
+# Frontend
+npm install @inertiajs/vue3
+```
+
+```php
+// bootstrap/app.php — register middleware
+->withMiddleware(function (Middleware $middleware) {
+    $middleware->web(append: [
+        \App\Http\Middleware\HandleInertiaRequests::class,
+    ]);
+})
+```
+
+---
+
+## HandleInertiaRequests Middleware
+
+```php
+// app/Http/Middleware/HandleInertiaRequests.php
+namespace App\Http\Middleware;
+
+use Illuminate\Http\Request;
+use Inertia\Middleware;
+
+class HandleInertiaRequests extends Middleware
+{
+    protected $rootView = 'app';
+
+    public function share(Request $request): array
+    {
+        return array_merge(parent::share($request), [
+            'auth' => [
+                'user' => $request->user(),
+            ],
+            'flash' => [
+                'success' => fn () => $request->session()->get('success'),
+                'error'   => fn () => $request->session()->get('error'),
+            ],
+        ]);
+    }
+}
+```
+
+---
+
+## Controller + Vue Page
+
+```php
+// app/Http/Controllers/ProductController.php
+use Inertia\Inertia;
+
+class ProductController extends Controller
+{
+    public function index()
+    {
+        return Inertia::render('Products/Index', [
+            'products' => Product::with('category')
+                ->paginate(20),
+            'filters' => request()->only(['search', 'category']),
+        ]);
+    }
+
+    public function store(StoreProductRequest $request)
+    {
+        Product::create($request->validated());
+
+        return redirect()
+            ->route('products.index')
+            ->with('success', 'เพิ่มสินค้าเรียบร้อย');
+    }
+}
+```
+
+```vue
+<!-- resources/js/Pages/Products/Index.vue -->
+<script setup lang="ts">
+import { Link, router } from '@inertiajs/vue3'
+import AppLayout from '@/Layouts/AppLayout.vue'
+
+defineProps<{
+  products: Paginated<Product>
+  filters: { search?: string; category?: string }
+}>()
+
+function deleteProduct(id: number) {
+  if (confirm('ยืนยันการลบ?')) {
+    router.delete(route('products.destroy', id))
+  }
+}
+</script>
+
+<template>
+  <AppLayout title="สินค้า">
+    <Link :href="route('products.create')" class="btn-primary">
+      เพิ่มสินค้า
+    </Link>
+    <ProductTable
+      v-for="product in products.data"
+      :key="product.id"
+      :product="product"
+      @delete="deleteProduct"
+    />
+  </AppLayout>
+</template>
+```
+
+---
+
+## Form Handling ด้วย useForm
+
+```vue
+<script setup lang="ts">
+import { useForm } from '@inertiajs/vue3'
+
+const form = useForm({
+  name: '',
+  price: 0,
+  category_id: null as number | null,
+})
+
+function submit() {
+  form.post(route('products.store'), {
+    onSuccess: () => form.reset(),
+  })
+}
+</script>
+
+<template>
+  <form @submit.prevent="submit">
+    <input v-model="form.name" />
+    <span v-if="form.errors.name" class="error">{{ form.errors.name }}</span>
+
+    <input v-model.number="form.price" type="number" />
+    <span v-if="form.errors.price" class="error">{{ form.errors.price }}</span>
+
+    <button :disabled="form.processing">
+      {{ form.processing ? 'กำลังบันทึก...' : 'บันทึก' }}
+    </button>
+  </form>
+</template>
+```
+
+<Callout type="tip">
+`useForm` จัดการ validation errors จาก Laravel อัตโนมัติ — ไม่ต้อง parse response เอง
+</Callout>
+
+---
+
+## Partial Reloads & Lazy Data
+
+```php
+// โหลด stats เฉพาะเมื่อ client ขอ
+return Inertia::render('Dashboard/Index', [
+    'orders'    => fn () => Order::latest()->take(10)->get(),
+    'stats'     => Inertia::lazy(fn () => [
+        'revenue' => Order::whereMonth('created_at', now())->sum('total'),
+        'count'   => Order::whereMonth('created_at', now())->count(),
+    ]),
+]);
+```
+
+```vue
+<script setup lang="ts">
+import { router } from '@inertiajs/vue3'
+
+function loadStats() {
+  router.reload({ only: ['stats'] })
+}
+</script>
+```
+
+---
+
+## File Upload
+
+```vue
+<script setup lang="ts">
+import { useForm } from '@inertiajs/vue3'
+
+const form = useForm<{ name: string; image: File | null }>({
+  name: '',
+  image: null,
+})
+
+function onFileChange(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (file) form.image = file
+}
+
+function submit() {
+  form.post(route('products.store'), {
+    forceFormData: true,
+  })
+}
+</script>
+```
+
+---
+
+## Ziggy — Named Routes ใน Vue
+
+```bash
+composer require tightenco/ziggy
+```
+
+```typescript
+// resources/js/app.ts
+import { ZiggyVue } from '../../vendor/tightenco/ziggy'
+
+createInertiaApp({
+  setup({ el, App, props, plugin }) {
+    createApp({ render: () => h(App, props) })
+      .use(plugin)
+      .use(ZiggyVue)
+      .mount(el)
+  },
+})
+```
+
+```vue
+<Link :href="route('products.show', product.id)">ดูรายละเอียด</Link>
+```
+
+---
+
+## สรุป
+
+| Feature | วิธีใช้ |
+|---|---|
+| Render page | `Inertia::render('Page/Name', $props)` |
+| Navigation | `<Link>` หรือ `router.visit()` |
+| Forms | `useForm()` + `form.post()` |
+| Shared data | `HandleInertiaRequests::share()` |
+| Lazy loading | `Inertia::lazy(fn () => ...)` |
+| Named routes | Ziggy `route('name', params)` |

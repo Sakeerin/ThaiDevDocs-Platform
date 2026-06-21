@@ -1,0 +1,213 @@
+---
+title: "MySQL Optimization สำหรับ Laravel Production"
+description: "ปรับแต่ง MySQL indexes query optimization slow query log และ Laravel-specific database tuning"
+topic: devops
+subtopic: database
+tags:
+  - mysql
+  - optimization
+  - indexes
+  - performance
+  - laravel
+difficulty: advanced
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 14
+is_premium: false
+---
+
+## MySQL Performance ใน Laravel
+
+Database มักเป็น bottleneck แรกของ Laravel app — index ไม่ครบ, N+1 query, หรือ config ไม่เหมาะสม
+
+---
+
+## Slow Query Log
+
+```ini
+# /etc/mysql/conf.d/slow-query.cnf
+[mysqld]
+slow_query_log = 1
+slow_query_log_file = /var/log/mysql/slow.log
+long_query_time = 1
+log_queries_not_using_indexes = 1
+```
+
+```bash
+# วิเคราะห์ slow queries
+mysqldumpslow -s t -t 10 /var/log/mysql/slow.log
+```
+
+---
+
+## Index Strategy
+
+```php
+// migration — index columns ที่ query บ่อย
+Schema::create('orders', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('user_id')->constrained();
+    $table->string('status');
+    $table->decimal('total', 12, 2);
+    $table->timestamps();
+
+    // Composite index สำหรับ query ที่ filter + sort
+    $table->index(['user_id', 'status', 'created_at']);
+    $table->index(['status', 'created_at']);
+});
+```
+
+```sql
+-- ตรวจสอบ index usage
+EXPLAIN SELECT * FROM orders
+WHERE user_id = 1 AND status = 'paid'
+ORDER BY created_at DESC
+LIMIT 20;
+```
+
+<Callout type="info">
+ดู `type` ใน EXPLAIN — ควรเป็น `ref` หรือ `range` ไม่ใช่ `ALL` (full table scan)
+</Callout>
+
+---
+
+## Laravel Query Optimization
+
+```php
+// ❌ SELECT *
+$users = User::all();
+
+// ✅ Select เฉพาะ columns ที่ใช้
+$users = User::select('id', 'name', 'email')->get();
+
+// ❌ count() ใน loop
+foreach ($users as $user) {
+    $user->orders()->count();
+}
+
+// ✅ withCount
+$users = User::withCount('orders')->get();
+
+// ✅ Chunk สำหรับ large dataset
+Order::where('status', 'pending')
+    ->chunkById(500, function ($orders) {
+        foreach ($orders as $order) {
+            ProcessOrder::dispatch($order);
+        }
+    });
+```
+
+---
+
+## MySQL Config Tuning
+
+```ini
+# /etc/mysql/conf.d/performance.cnf
+[mysqld]
+innodb_buffer_pool_size = 2G      # 70-80% ของ RAM ที่ dedicated ให้ MySQL
+innodb_log_file_size = 256M
+innodb_flush_log_at_trx_commit = 2  # trade durability for speed (acceptable สำหรับ most apps)
+max_connections = 200
+tmp_table_size = 64M
+max_heap_table_size = 64M
+
+# Query cache ถูก remove ใน MySQL 8 — ใช้ Redis แทน
+```
+
+---
+
+## Connection Pooling
+
+```php
+// config/database.php
+'mysql' => [
+    'driver' => 'mysql',
+    // ...
+    'options' => extension_loaded('pdo_mysql') ? array_filter([
+        PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
+        PDO::ATTR_PERSISTENT => false, // อย่าเปิด persistent ใน PHP-FPM
+    ]) : [],
+],
+```
+
+<Callout type="warning">
+PHP-FPM สร้าง connection ใหม่ทุก request — ใช้ ProxySQL หรือ RDS Proxy ถ้า connection count สูง
+</Callout>
+
+---
+
+## Read Replicas
+
+```php
+// config/database.php
+'mysql' => [
+    'read' => [
+        'host' => [env('DB_READ_HOST', '127.0.0.1')],
+    ],
+    'write' => [
+        'host' => [env('DB_WRITE_HOST', '127.0.0.1')],
+    ],
+    'sticky' => true, // read จาก write หลัง write ใน request เดียวกัน
+    // ...
+],
+```
+
+```php
+// Report queries ไป read replica
+$report = DB::connection('mysql::read')
+    ->table('orders')
+    ->whereYear('created_at', 2026)
+    ->sum('total');
+```
+
+---
+
+## Database Monitoring
+
+```php
+// AppServiceProvider — log slow queries ใน dev
+if (app()->environment('local')) {
+    DB::listen(function ($query) {
+        if ($query->time > 100) {
+            Log::warning('Slow query', [
+                'sql' => $query->sql,
+                'time' => $query->time . 'ms',
+            ]);
+        }
+    });
+}
+```
+
+---
+
+## Table Maintenance
+
+```sql
+-- วิเคราะห์และ optimize tables
+ANALYZE TABLE orders;
+OPTIMIZE TABLE orders;
+
+-- ดู table size
+SELECT
+    table_name,
+    ROUND(data_length / 1024 / 1024, 2) AS data_mb,
+    ROUND(index_length / 1024 / 1024, 2) AS index_mb
+FROM information_schema.tables
+WHERE table_schema = 'laravel'
+ORDER BY data_length DESC;
+```
+
+---
+
+## สรุป
+
+| Technique | Impact |
+|---|---|
+| Composite indexes | ลด full table scan |
+| Eager loading | แก้ N+1 |
+| `chunkById()` | ประมวลผล large dataset |
+| `innodb_buffer_pool_size` | Cache hot data ใน RAM |
+| Read replicas | แยก read/write load |
+| Slow query log | หา bottleneck |

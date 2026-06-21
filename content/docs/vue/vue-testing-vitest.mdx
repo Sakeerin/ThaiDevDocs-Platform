@@ -1,0 +1,288 @@
+---
+title: "Vue Testing ด้วย Vitest และ Vue Test Utils"
+description: "เขียน unit test และ component test สำหรับ Vue 3 ด้วย Vitest, @vue/test-utils และ mock Pinia/API"
+topic: vue
+subtopic: testing
+tags:
+  - vitest
+  - testing
+  - vue-test-utils
+  - unit-test
+  - mock
+difficulty: intermediate
+vue_version: "3.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 14
+is_premium: false
+---
+
+## ทำไม Vitest?
+
+**Vitest** เป็น test runner ที่ออกแบบมาสำหรับ Vite — เร็ว, รองรับ ESM natively และ config ใช้ร่วมกับ Vite ได้
+
+<Callout type="info">
+Vitest API คล้าย Jest — ถ้าเคยใช้ Jest migrate ได้ง่าย (`describe`, `it`, `expect`)
+</Callout>
+
+---
+
+## ติดตั้ง
+
+```bash
+npm install -D vitest @vue/test-utils jsdom @testing-library/vue
+```
+
+```typescript
+// vitest.config.ts
+import { defineConfig, mergeConfig } from 'vitest/config'
+import viteConfig from './vite.config'
+
+export default mergeConfig(viteConfig, defineConfig({
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./tests/setup.ts'],
+  },
+}))
+```
+
+```typescript
+// tests/setup.ts
+import { config } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
+
+beforeEach(() => {
+  setActivePinia(createPinia())
+})
+```
+
+```json
+// package.json
+{
+  "scripts": {
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  }
+}
+```
+
+---
+
+## Test Composable
+
+```typescript
+// composables/useCounter.ts
+import { ref, computed } from 'vue'
+
+export function useCounter(initial = 0) {
+  const count = ref(initial)
+  const doubled = computed(() => count.value * 2)
+
+  function increment() { count.value++ }
+  function decrement() { count.value-- }
+
+  return { count, doubled, increment, decrement }
+}
+```
+
+```typescript
+// composables/useCounter.test.ts
+import { describe, it, expect } from 'vitest'
+import { useCounter } from './useCounter'
+
+describe('useCounter', () => {
+  it('starts with initial value', () => {
+    const { count } = useCounter(5)
+    expect(count.value).toBe(5)
+  })
+
+  it('increments count', () => {
+    const { count, increment } = useCounter()
+    increment()
+    expect(count.value).toBe(1)
+  })
+
+  it('computes doubled value', () => {
+    const { count, doubled, increment } = useCounter(3)
+    expect(doubled.value).toBe(6)
+    increment()
+    expect(doubled.value).toBe(8)
+  })
+})
+```
+
+---
+
+## Test Component
+
+```vue
+<!-- components/ProductCard.vue -->
+<script setup lang="ts">
+defineProps<{
+  name: string
+  price: number
+}>()
+
+defineEmits<{ addToCart: [] }>()
+</script>
+
+<template>
+  <div class="product-card">
+    <h3>{{ name }}</h3>
+    <p>{{ price.toLocaleString('th-TH') }} บาท</p>
+    <button data-testid="add-btn" @click="$emit('addToCart')">
+      เพิ่มลงตะกร้า
+    </button>
+  </div>
+</template>
+```
+
+```typescript
+// components/ProductCard.test.ts
+import { describe, it, expect, vi } from 'vitest'
+import { mount } from '@vue/test-utils'
+import ProductCard from './ProductCard.vue'
+
+describe('ProductCard', () => {
+  it('renders product info', () => {
+    const wrapper = mount(ProductCard, {
+      props: { name: 'iPhone 15', price: 35900 },
+    })
+
+    expect(wrapper.text()).toContain('iPhone 15')
+    expect(wrapper.text()).toContain('35,900')
+  })
+
+  it('emits addToCart on button click', async () => {
+    const wrapper = mount(ProductCard, {
+      props: { name: 'Test', price: 100 },
+    })
+
+    await wrapper.find('[data-testid="add-btn"]').trigger('click')
+    expect(wrapper.emitted('addToCart')).toHaveLength(1)
+  })
+})
+```
+
+---
+
+## Mock Pinia Store
+
+```typescript
+// components/CartBadge.test.ts
+import { mount } from '@vue/test-utils'
+import { createTestingPinia } from '@pinia/testing'
+import CartBadge from './CartBadge.vue'
+import { useCartStore } from '@/stores/cart'
+
+describe('CartBadge', () => {
+  it('shows item count from store', () => {
+    const wrapper = mount(CartBadge, {
+      global: {
+        plugins: [createTestingPinia({ createSpy: vi.fn })],
+      },
+    })
+
+    const store = useCartStore()
+    store.addItem({ id: 1, name: 'Test', price: 100 })
+    store.addItem({ id: 2, name: 'Test2', price: 200 })
+
+    expect(wrapper.text()).toContain('2')
+  })
+})
+```
+
+---
+
+## Mock API / fetch
+
+```typescript
+// services/productService.test.ts
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { fetchProducts } from './productService'
+
+describe('fetchProducts', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('returns products from API', async () => {
+    const mockProducts = [{ id: 1, name: 'Laptop', price: 25000 }]
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockProducts),
+    }))
+
+    const result = await fetchProducts()
+    expect(result).toEqual(mockProducts)
+    expect(fetch).toHaveBeenCalledWith('/api/products')
+  })
+})
+```
+
+---
+
+## Test Async Component
+
+```typescript
+import { flushPromises } from '@vue/test-utils'
+
+describe('ProductList', () => {
+  it('loads and displays products', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve([{ id: 1, name: 'Phone', price: 15000 }]),
+    }))
+
+    const wrapper = mount(ProductList)
+    expect(wrapper.find('.loading').exists()).toBe(true)
+
+    await flushPromises()
+
+    expect(wrapper.find('.loading').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Phone')
+  })
+})
+```
+
+---
+
+## Snapshot Testing (ใช้เฉพาะ stable UI)
+
+```typescript
+it('matches snapshot', () => {
+  const wrapper = mount(Button, { props: { variant: 'primary' } })
+  expect(wrapper.html()).toMatchSnapshot()
+})
+```
+
+<Callout type="warning">
+Snapshot test update บ่อยเมื่อ UI เปลี่ยน — ใช้กับ component ที่ stable เช่น icon, badge มากกว่า page ทั้งหน้า
+</Callout>
+
+---
+
+## CI Integration
+
+```yaml
+# .github/workflows/test.yml
+- name: Run Vue tests
+  run: npm run test:run -- --coverage
+```
+
+---
+
+## สรุป
+
+| ประเภท | เครื่องมือ |
+|---|---|
+| Composable test | Vitest โดยตรง |
+| Component test | `@vue/test-utils` mount/shallowMount |
+| Pinia mock | `createTestingPinia()` |
+| API mock | `vi.stubGlobal('fetch', ...)` |
+| Async wait | `flushPromises()` |
+| Coverage | `vitest run --coverage` |

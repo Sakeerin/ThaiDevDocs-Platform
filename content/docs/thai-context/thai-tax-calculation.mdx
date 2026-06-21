@@ -1,0 +1,257 @@
+---
+title: "การคำนวณภาษีไทยใน Laravel"
+description: "คำนวณ VAT ภาษีหัก ณ ที่จ่าย (Withholding Tax) และใบกำกับภาษีในระบบ Laravel ตามกฎหมายไทย"
+topic: thai-context
+subtopic: finance
+tags:
+  - tax
+  - vat
+  - withholding
+  - invoice
+  - thailand
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 13
+is_premium: false
+---
+
+## ภาษีที่ใช้ในระบบไทย
+
+| ประเภท | อัตรา | ใช้เมื่อ |
+|---|---|---|
+| VAT (ภาษีมูลค่าเพิ่ม) | 7% | ขายสินค้า/บริการทั่วไป |
+| WHT (หัก ณ ที่จ่าย) | 1-5% | จ่ายค่าบริการ/ค่าเช่า |
+| Specific Business Tax | 3% | ธุรกิจเฉพาะ |
+
+<Callout type="info">
+VAT 7% เป็นอัตราปัจจุบัน — ตรวจสอบกฎหมายล่าสุดจากกรมสรรพากรก่อน production
+</Callout>
+
+---
+
+## Tax Calculation Service
+
+```php
+// app/Services/ThaiTaxService.php
+class ThaiTaxService
+{
+    public const VAT_RATE = 0.07;
+
+    // ราคารวม VAT → แยก base + vat
+    public function extractVat(float $priceIncludingVat): array
+    {
+        $base = round($priceIncludingVat / (1 + self::VAT_RATE), 2);
+        $vat = round($priceIncludingVat - $base, 2);
+
+        return [
+            'base_amount' => $base,
+            'vat_amount'  => $vat,
+            'total'       => $priceIncludingVat,
+        ];
+    }
+
+    // ราคายังไม่รวม VAT → คำนวณ VAT
+    public function addVat(float $baseAmount): array
+    {
+        $vat = round($baseAmount * self::VAT_RATE, 2);
+        $total = round($baseAmount + $vat, 2);
+
+        return [
+            'base_amount' => $baseAmount,
+            'vat_amount'  => $vat,
+            'total'       => $total,
+        ];
+    }
+
+    // ภาษีหัก ณ ที่จ่าย
+    public function calculateWithholdingTax(
+        float $amount,
+        string $type = 'service'
+    ): array {
+        $rate = match ($type) {
+            'service'  => 0.03,  // ค่าบริการ 3%
+            'rent'     => 0.05,  // ค่าเช่า 5%
+            'transport'=> 0.01,  // ค่าขนส่ง 1%
+            'advertising'=> 0.02,// ค่าโฆษณา 2%
+            default    => 0.03,
+        };
+
+        $wht = round($amount * $rate, 2);
+        $net = round($amount - $wht, 2);
+
+        return [
+            'gross_amount' => $amount,
+            'wht_rate'     => $rate,
+            'wht_amount'   => $wht,
+            'net_amount'   => $net,
+        ];
+    }
+}
+```
+
+---
+
+## Invoice Model
+
+```php
+// app/Models/Invoice.php
+class Invoice extends Model
+{
+    protected $casts = [
+        'subtotal'    => 'decimal:2',
+        'vat_amount'  => 'decimal:2',
+        'total'       => 'decimal:2',
+        'issued_at'   => 'datetime',
+    ];
+
+    public static function createFromOrder(Order $order): self
+    {
+        $taxService = app(ThaiTaxService::class);
+        $tax = $taxService->addVat($order->subtotal);
+
+        return self::create([
+            'order_id'       => $order->id,
+            'invoice_number' => self::generateNumber(),
+            'subtotal'       => $tax['base_amount'],
+            'vat_amount'     => $tax['vat_amount'],
+            'total'          => $tax['total'],
+            'tax_id'         => config('company.tax_id'),
+            'branch'         => config('company.branch', '00000'),
+            'issued_at'      => now(),
+        ]);
+    }
+
+    public static function generateNumber(): string
+    {
+        $prefix = 'INV-' . now()->format('Ym');
+        $last = self::where('invoice_number', 'like', "{$prefix}%")
+            ->orderByDesc('invoice_number')
+            ->value('invoice_number');
+
+        $seq = $last ? (int) substr($last, -4) + 1 : 1;
+        return $prefix . str_pad($seq, 4, '0', STR_PAD_LEFT);
+    }
+}
+```
+
+---
+
+## ใบกำกับภาษี (Tax Invoice)
+
+```php
+// app/Services/TaxInvoicePdfService.php
+class TaxInvoicePdfService
+{
+    public function generate(Invoice $invoice): string
+    {
+        $data = [
+            'invoice'      => $invoice,
+            'seller'       => [
+                'name'    => config('company.name'),
+                'address' => config('company.address'),
+                'tax_id'  => config('company.tax_id'),
+                'branch'  => config('company.branch'),
+            ],
+            'buyer'        => [
+                'name'    => $invoice->order->user->name,
+                'address' => $invoice->order->billing_address,
+                'tax_id'  => $invoice->order->tax_id,
+            ],
+            'items'        => $invoice->order->items,
+            'subtotal'     => number_format($invoice->subtotal, 2),
+            'vat_amount'   => number_format($invoice->vat_amount, 2),
+            'total'        => number_format($invoice->total, 2),
+            'total_text'   => $this->bahtText($invoice->total),
+        ];
+
+        $pdf = Pdf::loadView('pdf.tax-invoice', $data);
+        return $pdf->output();
+    }
+
+    private function bahtText(float $amount): string
+    {
+        // ใช้ library เช่น kwn/number-to-words หรือ custom Thai baht text
+        return BahtText::convert($amount);
+    }
+}
+```
+
+---
+
+## Order Calculation
+
+```php
+// app/Services/OrderCalculationService.php
+class OrderCalculationService
+{
+    public function calculate(Collection $items, ?string $couponCode = null): array
+    {
+        $subtotal = $items->sum(fn ($item) => $item->price * $item->quantity);
+
+        $discount = 0;
+        if ($couponCode) {
+            $coupon = Coupon::where('code', $couponCode)->first();
+            $discount = $coupon?->calculateDiscount($subtotal) ?? 0;
+        }
+
+        $afterDiscount = $subtotal - $discount;
+        $tax = app(ThaiTaxService::class)->addVat($afterDiscount);
+
+        return [
+            'subtotal'       => $subtotal,
+            'discount'       => $discount,
+            'base_amount'    => $tax['base_amount'],
+            'vat_amount'     => $tax['vat_amount'],
+            'total'          => $tax['total'],
+        ];
+    }
+}
+```
+
+<Callout type="tip">
+เก็บราคาเป็น **decimal(12,2)** ใน database — อย่าใช้ float สำหรับเงิน ใช้ `bcmath` หรือ `decimal` cast
+</Callout>
+
+---
+
+## VAT Report
+
+```php
+// app/Console/Commands/VatReportCommand.php
+class VatReportCommand extends Command
+{
+    protected $signature = 'tax:vat-report {month} {year}';
+
+    public function handle(): void
+    {
+        $invoices = Invoice::whereMonth('issued_at', $this->argument('month'))
+            ->whereYear('issued_at', $this->argument('year'))
+            ->get();
+
+        $this->table(
+            ['Metric', 'Amount'],
+            [
+                ['Output VAT (ขาย)', number_format($invoices->sum('vat_amount'), 2)],
+                ['Sales Base', number_format($invoices->sum('subtotal'), 2)],
+                ['Total Sales', number_format($invoices->sum('total'), 2)],
+                ['Invoice Count', $invoices->count()],
+            ]
+        );
+    }
+}
+```
+
+---
+
+## สรุป
+
+| Calculation | Formula |
+|---|---|
+| VAT from inclusive | `price / 1.07` |
+| VAT from exclusive | `price × 0.07` |
+| WHT service | `amount × 3%` |
+| Net after WHT | `amount - WHT` |
+| Storage | `decimal(12,2)` |

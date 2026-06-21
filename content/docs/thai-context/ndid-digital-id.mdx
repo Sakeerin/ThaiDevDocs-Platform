@@ -1,0 +1,218 @@
+---
+title: "NDID Digital Identity Integration"
+description: "เชื่อมต่อ NDID (National Digital ID) สำหรับ e-KYC identity verification ใน Laravel ตามมาตรฐานไทย"
+topic: thai-context
+subtopic: identity
+tags:
+  - ndid
+  - ekyc
+  - digital-id
+  - identity
+  - verification
+difficulty: advanced
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 14
+is_premium: false
+---
+
+## NDID คืออะไร?
+
+**NDID (National Digital ID)** เป็น digital identity platform ของไทย — ให้ user ยืนยันตัวตนผ่าน bank/financial institution ที่เป็น IdP (Identity Provider) โดยไม่ต้องส่ง copy บัตรประชาชน
+
+<Callout type="info">
+NDID ใช้ใน fintech, lending, insurance — ต้อง register เป็น NDID RP (Relying Party) ก่อนใช้งาน production
+</Callout>
+
+---
+
+## e-KYC Flow
+
+```
+User เริ่ม KYC ใน app
+    ↓
+Laravel สร้าง NDID Request → NDID Platform
+    ↓
+User เลือก IdP (เช่น SCB, KBank) ใน NDID App
+    ↓
+IdP ยืนยันตัวตน user
+    ↓
+NDID ส่ง verified data กลับ RP (เรา)
+    ↓
+Laravel บันทึก KYC status
+```
+
+---
+
+## Data Model
+
+```php
+// database/migrations/xxxx_create_kyc_verifications_table.php
+Schema::create('kyc_verifications', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('user_id')->constrained();
+    $table->string('ndid_request_id')->unique();
+    $table->string('idp_node_id')->nullable();
+    $table->enum('status', ['pending', 'approved', 'rejected', 'expired'])->default('pending');
+    $table->json('verified_data')->nullable(); // encrypted
+    $table->timestamp('verified_at')->nullable();
+    $table->timestamps();
+});
+```
+
+---
+
+## NDID Service
+
+```php
+// app/Services/NdidService.php
+class NdidService
+{
+    public function createVerificationRequest(User $user, string $idpNodeId): array
+    {
+        $requestId = Str::uuid()->toString();
+
+        $payload = [
+            'request_id'     => $requestId,
+            'rp_node_id'     => config('services.ndid.rp_node_id'),
+            'idp_node_id'    => $idpNodeId,
+            'callback_url'   => route('webhooks.ndid'),
+            'data_request'   => [
+                'citizen_id',
+                'name_th',
+                'name_en',
+                'date_of_birth',
+            ],
+            'min_ial'        => 2.3,  // Identity Assurance Level
+            'min_aal'        => 2.2,  // Authentication Assurance Level
+        ];
+
+        $response = Http::withHeaders([
+            'Authorization' => 'Bearer ' . $this->getToken(),
+            'Content-Type'  => 'application/json',
+        ])->post(config('services.ndid.base_url') . '/v1/requests', $payload)
+          ->throw();
+
+        KycVerification::create([
+            'user_id'         => $user->id,
+            'ndid_request_id' => $requestId,
+            'idp_node_id'     => $idpNodeId,
+            'status'          => 'pending',
+        ]);
+
+        return [
+            'request_id'  => $requestId,
+            'ndid_url'    => $response->json('redirect_url'),
+            'expires_at'  => now()->addMinutes(30),
+        ];
+    }
+}
+```
+
+---
+
+## Webhook Callback
+
+```php
+// app/Http/Controllers/NdidWebhookController.php
+class NdidWebhookController extends Controller
+{
+    public function __invoke(Request $request)
+    {
+        $requestId = $request->input('request_id');
+        $status = $request->input('status'); // 'completed', 'rejected', 'timeout'
+        $data = $request->input('data', []);
+
+        $kyc = KycVerification::where('ndid_request_id', $requestId)->firstOrFail();
+
+        if ($status === 'completed') {
+            $kyc->update([
+                'status'        => 'approved',
+                'verified_data' => encrypt($data),
+                'verified_at'   => now(),
+            ]);
+
+            $kyc->user->update([
+                'kyc_status'    => 'verified',
+                'kyc_verified_at' => now(),
+            ]);
+
+            KycVerified::dispatch($kyc->user);
+        } else {
+            $kyc->update(['status' => $status === 'timeout' ? 'expired' : 'rejected']);
+        }
+
+        return response()->json(['status' => 'received']);
+    }
+}
+```
+
+---
+
+## IdP Selection UI
+
+```vue
+<script setup lang="ts">
+const idpList = ref([
+  { nodeId: 'scb-idp', name: 'SCB', logo: '/images/scb.png' },
+  { nodeId: 'kbank-idp', name: 'KBank', logo: '/images/kbank.png' },
+  { nodeId: 'bbl-idp', name: 'BBL', logo: '/images/bbl.png' },
+])
+
+async function startKyc(idpNodeId: string) {
+  const { data } = await api.post('/kyc/ndid/start', { idp_node_id: idpNodeId })
+  window.location.href = data.ndid_url
+}
+</script>
+
+<template>
+  <div>
+    <h2>ยืนยันตัวตนด้วย NDID</h2>
+    <p>เลือกธนาคารที่คุณมีบัญชี</p>
+    <button
+      v-for="idp in idpList"
+      :key="idp.nodeId"
+      @click="startKyc(idp.nodeId)"
+      class="idp-button"
+    >
+      <img :src="idp.logo" :alt="idp.name" />
+      {{ idp.name }}
+    </button>
+  </div>
+</template>
+```
+
+<Callout type="warning">
+เก็บ verified_data ด้วย encryption — เป็นข้อมูลส่วนบุคคลตาม PDPA ต้องมี consent และ retention policy
+</Callout>
+
+---
+
+## PDPA Compliance
+
+```php
+// บันทึก consent ก่อนเริ่ม KYC
+KycConsent::create([
+    'user_id'      => $user->id,
+    'purpose'      => 'identity_verification',
+    'consented_at' => now(),
+    'ip_address'   => request()->ip(),
+]);
+
+// Data retention — ลบหลัง 5 ปี
+Schedule::command('kyc:cleanup-expired')->monthly();
+```
+
+---
+
+## สรุป
+
+| Component | Detail |
+|---|---|
+| RP Registration | NDID Platform onboarding |
+| IAL/AAL levels | Identity/Auth assurance |
+| IdP selection | User เลือก bank |
+| Webhook | Async verification result |
+| PDPA | Encrypt PII + consent + retention |

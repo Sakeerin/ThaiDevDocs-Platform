@@ -1,0 +1,263 @@
+---
+title: "LINE Bot + AI Integration"
+description: "สร้าง LINE Messaging Bot ที่ตอบด้วย AI webhook handler conversation context และ rich messages"
+topic: ai
+subtopic: chatbot
+tags:
+  - line
+  - chatbot
+  - ai
+  - webhook
+  - laravel
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 15
+is_premium: false
+---
+
+## LINE Bot + AI Architecture
+
+```
+User ส่งข้อความใน LINE
+    ↓
+LINE Platform → Webhook POST ไป Laravel
+    ↓
+Verify signature → Parse event
+    ↓
+RAG/Claude สร้างคำตอบ
+    ↓
+Reply message กลับ LINE
+```
+
+<Callout type="info">
+LINE เป็น messaging platform ที่ใช้กันมากที่สุดในไทย — เหมาะสำหรับ customer support bot และ FAQ automation
+</Callout>
+
+---
+
+## ติดตั้ง LINE SDK
+
+```bash
+composer require linecorp/line-bot-sdk
+```
+
+```bash
+# .env
+LINE_CHANNEL_SECRET=xxxxxxxx
+LINE_CHANNEL_ACCESS_TOKEN=xxxxxxxx
+```
+
+```php
+// config/services.php
+'line' => [
+    'channel_secret'       => env('LINE_CHANNEL_SECRET'),
+    'channel_access_token' => env('LINE_CHANNEL_ACCESS_TOKEN'),
+],
+```
+
+---
+
+## Webhook Controller
+
+```php
+// app/Http/Controllers/LineWebhookController.php
+use LINE\Clients\MessagingApi\Api\MessagingApiApi;
+use LINE\Clients\MessagingApi\Model\ReplyMessageRequest;
+use LINE\Clients\MessagingApi\Model\TextMessage;
+use LINE\Parser\EventRequestParser;
+use LINE\Parser\Exception\InvalidEventRequestException;
+use LINE\Parser\Exception\InvalidSignatureException;
+
+class LineWebhookController extends Controller
+{
+    public function __construct(
+        private AiQaService $qa,
+        private LineConversationService $conversation,
+    ) {}
+
+    public function __invoke(Request $request)
+    {
+        $signature = $request->header('X-Line-Signature');
+        $body = $request->getContent();
+
+        try {
+            $events = EventRequestParser::parseEventRequest(
+                $body,
+                config('services.line.channel_secret'),
+                $signature
+            );
+        } catch (InvalidSignatureException $e) {
+            return response('Invalid signature', 400);
+        }
+
+        foreach ($events as $event) {
+            if ($event instanceof MessageEvent && $event->getMessage() instanceof TextMessageContent) {
+                $this->handleTextMessage($event);
+            }
+        }
+
+        return response('OK', 200);
+    }
+
+    private function handleTextMessage(MessageEvent $event): void
+    {
+        $userId = $event->getSource()->getUserId();
+        $text = $event->getMessage()->getText();
+        $replyToken = $event->getReplyToken();
+
+        // เก็บ conversation history
+        $this->conversation->addMessage($userId, 'user', $text);
+
+        // ตอบด้วย RAG
+        $result = $this->qa->ask($text);
+        $this->conversation->addMessage($userId, 'assistant', $result['answer']);
+
+        $this->reply($replyToken, $result['answer'], $result['sources']);
+    }
+
+    private function reply(string $replyToken, string $text, array $sources): void
+    {
+        $client = new MessagingApiApi(
+            client: new Client(),
+            config: new Configuration([
+                'accessToken' => config('services.line.channel_access_token'),
+            ])
+        );
+
+        $messages = [new TextMessage(['type' => 'text', 'text' => $text])];
+
+        // เพิ่ม sources ถ้ามี
+        if (!empty($sources)) {
+            $sourceText = "📚 อ้างอิง:\n" . collect($sources)
+                ->map(fn ($s) => "• {$s['title']}")
+                ->join("\n");
+            $messages[] = new TextMessage(['type' => 'text', 'text' => $sourceText]);
+        }
+
+        $client->replyMessage(new ReplyMessageRequest([
+            'replyToken' => $replyToken,
+            'messages'   => $messages,
+        ]));
+    }
+}
+```
+
+---
+
+## Route (ไม่ใส่ CSRF)
+
+```php
+// routes/api.php
+Route::post('/webhooks/line', LineWebhookController::class)
+    ->withoutMiddleware([\App\Http\Middleware\VerifyCsrfToken::class]);
+```
+
+---
+
+## Conversation Context
+
+```php
+// app/Services/LineConversationService.php
+class LineConversationService
+{
+    private const MAX_HISTORY = 10;
+    private const TTL = 3600;
+
+    public function addMessage(string $userId, string $role, string $content): void
+    {
+        $key = "line:conversation:{$userId}";
+        $history = Cache::get($key, []);
+        $history[] = ['role' => $role, 'content' => $content];
+
+        if (count($history) > self::MAX_HISTORY * 2) {
+            $history = array_slice($history, -self::MAX_HISTORY * 2);
+        }
+
+        Cache::put($key, $history, self::TTL);
+    }
+
+    public function getHistory(string $userId): array
+    {
+        return Cache::get("line:conversation:{$userId}", []);
+    }
+}
+```
+
+---
+
+## Flex Message สำหรับ Rich Reply
+
+```php
+use LINE\Clients\MessagingApi\Model\FlexMessage;
+use LINE\Clients\MessagingApi\Model\FlexContainer;
+
+function buildProductFlex(Product $product): FlexMessage
+{
+    return new FlexMessage([
+        'type' => 'flex',
+        'altText' => $product->name,
+        'contents' => [
+            'type' => 'bubble',
+            'hero' => [
+                'type' => 'image',
+                'url' => $product->image_url,
+                'size' => 'full',
+            ],
+            'body' => [
+                'type' => 'box',
+                'layout' => 'vertical',
+                'contents' => [
+                    ['type' => 'text', 'text' => $product->name, 'weight' => 'bold'],
+                    ['type' => 'text', 'text' => number_format($product->price) . ' บาท'],
+                ],
+            ],
+        ],
+    ]);
+}
+```
+
+---
+
+## Rate Limiting & Quota
+
+```php
+// จำกัด AI queries ต่อ user ต่อวัน
+$key = "line:ai-quota:{$userId}";
+$count = Cache::get($key, 0);
+
+if ($count >= 20) {
+    $this->reply($replyToken, 'คุณใช้ quota ครบแล้ววันนี้ กรุณาลองใหม่พรุ่งนี้', []);
+    return;
+}
+
+Cache::put($key, $count + 1, now()->endOfDay());
+```
+
+<Callout type="warning">
+LINE reply token ใช้ได้ครั้งเดียวและหมดอายุใน 30 วินาที — process AI เร็วหรือใช้ push message สำหรับ response ช้า
+</Callout>
+
+---
+
+## Local Testing ด้วย ngrok
+
+```bash
+ngrok http 8000
+# ตั้ง webhook URL ใน LINE Developers Console:
+# https://xxxx.ngrok.io/api/webhooks/line
+```
+
+---
+
+## สรุป
+
+| Component | หน้าที่ |
+|---|---|
+| Webhook Controller | รับ events + verify signature |
+| AiQaService | RAG ตอบคำถาม |
+| LineConversationService | เก็บ chat history |
+| Flex Message | Rich product cards |
+| Rate limit | จำกัด quota ต่อ user |

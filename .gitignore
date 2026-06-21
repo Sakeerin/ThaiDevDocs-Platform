@@ -24,3 +24,9 @@ yarn-error.log*
 .env*.local
 .vercel
 next-env.d.ts
+/.data
+
+# Laravel API
+/apps/api/vendor
+/apps/api/.env
+/apps/api/database/database.sqlite

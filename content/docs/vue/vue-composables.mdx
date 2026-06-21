@@ -1,0 +1,274 @@
+---
+title: "Vue Composables — Reusable Logic Patterns"
+description: "สร้าง composables ที่ reuse ได้ useFetch useLocalStorage useDebounce และ best practices สำหรับ Vue 3"
+topic: vue
+subtopic: composition-api
+tags:
+  - composables
+  - reuse
+  - composition-api
+  - hooks
+  - patterns
+difficulty: intermediate
+vue_version: "3.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 13
+is_premium: false
+---
+
+## Composable คืออะไร?
+
+**Composable** คือ function ที่ใช้ Composition API (`ref`, `computed`, `watch`) เพื่อ encapsulate และ reuse stateful logic ข้าม components — คล้าย React Hooks
+
+<Callout type="info">
+ชื่อขึ้นต้นด้วย `use` ตาม convention — `useFetch`, `useAuth`, `usePagination`
+</Callout>
+
+---
+
+## โครงสร้าง Composable พื้นฐาน
+
+```typescript
+// composables/useToggle.ts
+import { ref, type Ref } from 'vue'
+
+export function useToggle(initial = false): {
+  value: Ref<boolean>
+  toggle: () => void
+  setTrue: () => void
+  setFalse: () => void
+} {
+  const value = ref(initial)
+
+  function toggle() { value.value = !value.value }
+  function setTrue() { value.value = true }
+  function setFalse() { value.value = false }
+
+  return { value, toggle, setTrue, setFalse }
+}
+```
+
+---
+
+## useFetch — Generic API Composable
+
+```typescript
+// composables/useFetch.ts
+import { ref, watch, type Ref, type MaybeRefOrGetter, toValue } from 'vue'
+
+interface UseFetchOptions {
+  immediate?: boolean
+}
+
+export function useFetch<T>(
+  url: MaybeRefOrGetter<string>,
+  options: UseFetchOptions = {}
+) {
+  const { immediate = true } = options
+
+  const data = ref<T | null>(null) as Ref<T | null>
+  const error = ref<Error | null>(null)
+  const loading = ref(false)
+
+  async function execute() {
+    loading.value = true
+    error.value = null
+
+    try {
+      const response = await fetch(toValue(url), {
+        headers: { Accept: 'application/json' },
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+
+      data.value = await response.json()
+    } catch (e) {
+      error.value = e instanceof Error ? e : new Error(String(e))
+    } finally {
+      loading.value = false
+    }
+  }
+
+  if (immediate) {
+    watch(() => toValue(url), execute, { immediate: true })
+  }
+
+  return { data, error, loading, execute, refresh: execute }
+}
+```
+
+```vue
+<script setup lang="ts">
+const productId = ref(1)
+const url = computed(() => `/api/products/${productId.value}`)
+const { data: product, loading, error } = useFetch<Product>(url)
+</script>
+```
+
+---
+
+## useDebounce
+
+```typescript
+// composables/useDebounce.ts
+import { ref, watch, type Ref } from 'vue'
+
+export function useDebounce<T>(value: Ref<T>, delay = 300): Ref<T> {
+  const debounced = ref(value.value) as Ref<T>
+  let timer: ReturnType<typeof setTimeout>
+
+  watch(value, (newVal) => {
+    clearTimeout(timer)
+    timer = setTimeout(() => {
+      debounced.value = newVal
+    }, delay)
+  })
+
+  return debounced
+}
+```
+
+```vue
+<script setup lang="ts">
+const searchInput = ref('')
+const debouncedSearch = useDebounce(searchInput, 400)
+
+watch(debouncedSearch, (query) => {
+  if (query.length >= 2) fetchResults(query)
+})
+</script>
+```
+
+---
+
+## useLocalStorage
+
+```typescript
+// composables/useLocalStorage.ts
+import { ref, watch, type Ref } from 'vue'
+
+export function useLocalStorage<T>(key: string, defaultValue: T): Ref<T> {
+  const stored = localStorage.getItem(key)
+  const value = ref(stored ? JSON.parse(stored) : defaultValue) as Ref<T>
+
+  watch(value, (newVal) => {
+    localStorage.setItem(key, JSON.stringify(newVal))
+  }, { deep: true })
+
+  return value
+}
+```
+
+---
+
+## useEventListener — Auto Cleanup
+
+```typescript
+// composables/useEventListener.ts
+import { onMounted, onUnmounted, type Ref } from 'vue'
+
+export function useEventListener<K extends keyof WindowEventMap>(
+  target: Window | Ref<EventTarget | null>,
+  event: K,
+  handler: (e: WindowEventMap[K]) => void
+) {
+  onMounted(() => {
+    const el = 'value' in target ? target.value : target
+    el?.addEventListener(event, handler as EventListener)
+  })
+
+  onUnmounted(() => {
+    const el = 'value' in target ? target.value : target
+    el?.removeEventListener(event, handler as EventListener)
+  })
+}
+```
+
+```vue
+<script setup lang="ts">
+useEventListener(window, 'resize', () => {
+  windowWidth.value = window.innerWidth
+})
+</script>
+```
+
+---
+
+## useInfiniteScroll
+
+```typescript
+// composables/useInfiniteScroll.ts
+import { ref, onMounted, onUnmounted } from 'vue'
+
+export function useInfiniteScroll(callback: () => void | Promise<void>, offset = 200) {
+  const loading = ref(false)
+
+  async function onScroll() {
+    const { scrollTop, scrollHeight, clientHeight } = document.documentElement
+    if (scrollTop + clientHeight >= scrollHeight - offset && !loading.value) {
+      loading.value = true
+      await callback()
+      loading.value = false
+    }
+  }
+
+  onMounted(() => window.addEventListener('scroll', onScroll))
+  onUnmounted(() => window.removeEventListener('scroll', onScroll))
+
+  return { loading }
+}
+```
+
+---
+
+## Best Practices
+
+<Callout type="tip">
+1. Return object ไม่ใช่ array — ให้ consumer destructure ได้ชัดเจน
+2. ใช้ `onUnmounted` cleanup timers, listeners, subscriptions
+3. รับ `MaybeRefOrGetter` เมื่อ input อาจเป็น ref หรือ plain value
+4. Export types ร่วมกับ composable
+</Callout>
+
+```typescript
+// ❌ อย่า mutate props ใน composable
+export function useBad(props: { count: number }) {
+  props.count++ // ผิด!
+}
+
+// ✅ รับ ref หรือ return state ใหม่
+export function useGood(count: Ref<number>) {
+  function increment() { count.value++ }
+  return { increment }
+}
+```
+
+---
+
+## โฟลเดอร์ Structure
+
+```
+composables/
+├── useFetch.ts
+├── useDebounce.ts
+├── useLocalStorage.ts
+├── usePagination.ts
+└── auth/
+    └── usePermissions.ts
+```
+
+---
+
+## สรุป
+
+| Composable | ใช้เมื่อ |
+|---|---|
+| `useFetch` | ดึง API + loading/error state |
+| `useDebounce` | Search input, filter |
+| `useLocalStorage` | Persist UI preferences |
+| `useEventListener` | Window/element events + cleanup |
+| `useInfiniteScroll` | Load more pagination |

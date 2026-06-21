@@ -1,0 +1,266 @@
+---
+title: "OTP สำหรับเบอร์โทรไทย"
+description: "ส่งและ verify OTP ผ่าน SMS สำหรับเบอร์มือถือไทย rate limiting validation และ integration กับ Thai SMS providers"
+topic: thai-context
+subtopic: verification
+tags:
+  - otp
+  - sms
+  - phone
+  - verification
+  - thailand
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 12
+is_premium: false
+---
+
+## OTP Flow สำหรับเบอร์ไทย
+
+```
+User กรอกเบอร์โทร
+    ↓
+Validate format (08x, 09x, 06x)
+    ↓
+Generate OTP → เก็บใน Redis (TTL 5 นาที)
+    ↓
+ส่ง SMS ผ่าน provider
+    ↓
+User กรอก OTP → Verify
+    ↓
+Mark phone verified
+```
+
+<Callout type="info">
+เบอร์มือถือไทย 10 หลัก ขึ้นต้น 06, 08, 09 — normalize เป็น format เดียวก่อน validate
+</Callout>
+
+---
+
+## Phone Validation
+
+```php
+// app/Rules/ThaiPhoneNumber.php
+class ThaiPhoneNumber implements ValidationRule
+{
+    public function validate(string $attribute, mixed $value, Closure $fail): void
+    {
+        $normalized = PhoneNormalizer::normalize($value);
+
+        if (!preg_match('/^0[689]\d{8}$/', $normalized)) {
+            $fail('เบอร์โทรศัพท์ไม่ถูกต้อง กรุณากรอกเบอร์มือถือ 10 หลัก');
+        }
+    }
+}
+```
+
+```php
+// app/Support/PhoneNormalizer.php
+class PhoneNormalizer
+{
+    public static function normalize(string $phone): string
+    {
+        $phone = preg_replace('/[\s\-\(\)]/', '', $phone);
+
+        // +66812345678 → 0812345678
+        if (str_starts_with($phone, '+66')) {
+            $phone = '0' . substr($phone, 3);
+        }
+        // 66812345678 → 0812345678
+        if (str_starts_with($phone, '66') && strlen($phone) === 11) {
+            $phone = '0' . substr($phone, 2);
+        }
+
+        return $phone;
+    }
+
+    public static function toInternational(string $phone): string
+    {
+        $normalized = self::normalize($phone);
+        return '+66' . substr($normalized, 1);
+    }
+}
+```
+
+---
+
+## OTP Service
+
+```php
+// app/Services/OtpService.php
+class OtpService
+{
+    private const OTP_LENGTH = 6;
+    private const TTL_SECONDS = 300; // 5 minutes
+    private const MAX_ATTEMPTS = 3;
+    private const RESEND_COOLDOWN = 60;
+
+    public function generate(string $phone): void
+    {
+        $phone = PhoneNormalizer::normalize($phone);
+        $cooldownKey = "otp:cooldown:{$phone}";
+
+        if (Cache::has($cooldownKey)) {
+            throw new TooManyRequestsException('กรุณารอ 60 วินาทีก่อนขอ OTP ใหม่');
+        }
+
+        $otp = str_pad((string) random_int(0, 999999), self::OTP_LENGTH, '0', STR_PAD_LEFT);
+        $hashedOtp = hash('sha256', $otp . config('app.key'));
+
+        Cache::put("otp:{$phone}", [
+            'hash'     => $hashedOtp,
+            'attempts' => 0,
+        ], self::TTL_SECONDS);
+
+        Cache::put($cooldownKey, true, self::RESEND_COOLDOWN);
+
+        $this->sendSms($phone, "รหัส OTP ของคุณคือ {$otp} (หมดอายุใน 5 นาที) ห้ามแชร์ให้ผู้อื่น");
+    }
+
+    public function verify(string $phone, string $otp): bool
+    {
+        $phone = PhoneNormalizer::normalize($phone);
+        $key = "otp:{$phone}";
+        $data = Cache::get($key);
+
+        if (!$data) {
+            throw new ValidationException('OTP หมดอายุ กรุณาขอใหม่');
+        }
+
+        if ($data['attempts'] >= self::MAX_ATTEMPTS) {
+            Cache::forget($key);
+            throw new ValidationException('ลองผิดเกินจำนวนที่กำหนด กรุณาขอ OTP ใหม่');
+        }
+
+        $data['attempts']++;
+        Cache::put($key, $data, self::TTL_SECONDS);
+
+        $hashedInput = hash('sha256', $otp . config('app.key'));
+
+        if (!hash_equals($data['hash'], $hashedInput)) {
+            return false;
+        }
+
+        Cache::forget($key);
+        return true;
+    }
+
+    private function sendSms(string $phone, string $message): void
+    {
+        $international = PhoneNormalizer::toInternational($phone);
+
+        Http::post(config('services.sms.url'), [
+            'api_key'  => config('services.sms.api_key'),
+            'to'       => $international,
+            'message'  => $message,
+            'sender'   => config('services.sms.sender', 'MyApp'),
+        ])->throw();
+    }
+}
+```
+
+---
+
+## API Controller
+
+```php
+// app/Http/Controllers/OtpController.php
+class OtpController extends Controller
+{
+    public function send(Request $request, OtpService $otp)
+    {
+        $request->validate([
+            'phone' => ['required', 'string', new ThaiPhoneNumber],
+        ]);
+
+        RateLimiter::attempt(
+            'otp-send:' . $request->ip(),
+            5,
+            fn () => $otp->generate($request->phone),
+            3600
+        );
+
+        return response()->json([
+            'message' => 'ส่ง OTP แล้ว',
+            'expires_in' => 300,
+        ]);
+    }
+
+    public function verify(Request $request, OtpService $otp)
+    {
+        $request->validate([
+            'phone' => ['required', 'string', new ThaiPhoneNumber],
+            'otp'   => 'required|string|size:6',
+        ]);
+
+        if (!$otp->verify($request->phone, $request->otp)) {
+            return response()->json(['message' => 'OTP ไม่ถูกต้อง'], 422);
+        }
+
+        $phone = PhoneNormalizer::normalize($request->phone);
+
+        $user = auth()->user();
+        $user->update([
+            'phone'            => $phone,
+            'phone_verified_at' => now(),
+        ]);
+
+        return response()->json(['message' => 'ยืนยันเบอร์โทรสำเร็จ']);
+    }
+}
+```
+
+---
+
+## Rate Limiting
+
+```php
+// RouteServiceProvider
+RateLimiter::for('otp', function (Request $request) {
+    return [
+        Limit::perMinute(1)->by('otp-phone:' . $request->phone),
+        Limit::perHour(5)->by('otp-ip:' . $request->ip()),
+    ];
+});
+```
+
+<Callout type="warning">
+ห้าม log OTP plaintext — hash ก่อนเก็บ และใช้ Redis TTL auto-expire
+</Callout>
+
+---
+
+## Thai SMS Providers
+
+| Provider | ใช้เมื่อ |
+|---|---|
+| ThaiBulkSMS | ราคาถูก volume สูง |
+| SMSMKT | Marketing + OTP |
+| Twilio | International fallback |
+| AIS/TRUE API | Enterprise direct |
+
+```php
+// config/services.php
+'sms' => [
+    'provider' => env('SMS_PROVIDER', 'thaibulksms'),
+    'api_key'  => env('SMS_API_KEY'),
+    'sender'   => env('SMS_SENDER', 'MyApp'),
+    'url'      => env('SMS_API_URL'),
+],
+```
+
+---
+
+## สรุป
+
+| Step | Detail |
+|---|---|
+| Normalize | `0812345678` format |
+| Generate | 6 digits, hash ก่อนเก็บ |
+| TTL | 5 นาที |
+| Max attempts | 3 ครั้ง |
+| Resend cooldown | 60 วินาที |
+| Rate limit | 5/hour per IP |

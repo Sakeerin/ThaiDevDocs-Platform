@@ -1,0 +1,222 @@
+---
+title: "Redis กับ Laravel — Cache Queue Session"
+description: "ตั้งค่า Redis สำหรับ cache queue session และ rate limiting ใน Laravel 11 พร้อม production config"
+topic: devops
+subtopic: cache
+tags:
+  - redis
+  - cache
+  - queue
+  - session
+  - laravel
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 13
+is_premium: false
+---
+
+## Redis ใน Laravel Stack
+
+**Redis** เป็น in-memory data store ที่ Laravel ใช้เป็น cache, queue backend, session store และ rate limiter — เร็วกว่า database มาก
+
+---
+
+## ติดตั้งและ Config
+
+```bash
+# Ubuntu
+sudo apt install redis-server
+sudo systemctl enable redis-server
+
+# PHP extension
+sudo apt install php8.3-redis
+```
+
+```bash
+# .env
+REDIS_CLIENT=phpredis
+REDIS_HOST=127.0.0.1
+REDIS_PASSWORD=null
+REDIS_PORT=6379
+
+CACHE_STORE=redis
+QUEUE_CONNECTION=redis
+SESSION_DRIVER=redis
+```
+
+```php
+// config/database.php
+'redis' => [
+    'client' => env('REDIS_CLIENT', 'phpredis'),
+    'default' => [
+        'host' => env('REDIS_HOST', '127.0.0.1'),
+        'password' => env('REDIS_PASSWORD'),
+        'port' => env('REDIS_PORT', '6379'),
+        'database' => env('REDIS_DB', '0'),
+    ],
+    'cache' => [
+        'host' => env('REDIS_HOST', '127.0.0.1'),
+        'database' => env('REDIS_CACHE_DB', '1'),
+    ],
+],
+```
+
+---
+
+## Cache Patterns
+
+```php
+// จำกัด DB query ด้วย cache
+public function getPopularProducts(): Collection
+{
+    return Cache::remember('products:popular', now()->addHour(), function () {
+        return Product::withCount('orders')
+            ->orderByDesc('orders_count')
+            ->take(10)
+            ->get();
+    });
+}
+
+// Cache tags — invalidate เป็น group
+Cache::tags(['products', 'category:1'])->put('key', $data, 3600);
+Cache::tags(['products'])->flush(); // ลบ cache ทั้ง group
+
+// Atomic lock — ป้องกัน race condition
+Cache::lock('process-order:' . $orderId, 10)->block(5, function () use ($order) {
+    $this->processPayment($order);
+});
+```
+
+<Callout type="tip">
+ใช้ cache tags เมื่อ invalidate ต้องลบหลาย keys พร้อมกัน — เช่น เมื่อ update product ลบ cache ทุกหน้าที่แสดง product นั้น
+</Callout>
+
+---
+
+## Queue ด้วย Redis
+
+```php
+// dispatch job
+ProcessPayment::dispatch($order)->onQueue('payments');
+
+// Job class
+class ProcessPayment implements ShouldQueue
+{
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+
+    public int $tries = 3;
+    public int $backoff = 30;
+
+    public function __construct(public Order $order) {}
+
+    public function handle(): void
+    {
+        // process payment
+    }
+}
+```
+
+```bash
+# Run worker
+php artisan queue:work redis --queue=payments,default --sleep=3 --tries=3
+
+# Supervisor (production)
+[program:laravel-worker]
+command=php /var/www/app/artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
+numprocs=4
+autostart=true
+autorestart=true
+```
+
+---
+
+## Session ใน Redis
+
+```php
+// config/session.php
+'driver' => env('SESSION_DRIVER', 'redis'),
+'lifetime' => 120,
+'connection' => 'default',
+```
+
+<Callout type="info">
+Redis session เหมาะกับ multi-server setup — session share ได้ข้าม server โดยไม่ต้อง sticky session
+</Callout>
+
+---
+
+## Rate Limiting
+
+```php
+// RouteServiceProvider หรือ route
+Route::middleware(['throttle:api'])->group(function () {
+    Route::get('/api/products', [ProductController::class, 'index']);
+});
+
+// config — custom rate limiter
+RateLimiter::for('api', function (Request $request) {
+    return Limit::perMinute(60)->by($request->user()?->id ?: $request->ip());
+});
+
+RateLimiter::for('otp', function (Request $request) {
+    return Limit::perMinute(3)->by($request->input('phone'));
+});
+```
+
+---
+
+## Horizon (Queue Dashboard)
+
+```bash
+composer require laravel/horizon
+php artisan horizon:install
+```
+
+```php
+// config/horizon.php
+'environments' => [
+    'production' => [
+        'supervisor-1' => [
+            'connection' => 'redis',
+            'queue' => ['default', 'payments', 'notifications'],
+            'balance' => 'auto',
+            'processes' => 10,
+        ],
+    ],
+],
+```
+
+---
+
+## Production Redis Config
+
+```conf
+# /etc/redis/redis.conf
+maxmemory 512mb
+maxmemory-policy allkeys-lru
+requirepass your-strong-password
+bind 127.0.0.1
+```
+
+```bash
+# Monitor
+redis-cli info memory
+redis-cli --stat
+redis-cli monitor  # debug (อย่าใช้ production)
+```
+
+---
+
+## สรุป
+
+| Use Case | Laravel Config |
+|---|---|
+| Cache | `CACHE_STORE=redis` |
+| Queue | `QUEUE_CONNECTION=redis` |
+| Session | `SESSION_DRIVER=redis` |
+| Rate limit | `throttle` middleware |
+| Dashboard | Laravel Horizon |
+| Lock | `Cache::lock()` |

@@ -1,0 +1,225 @@
+---
+title: "KBank K+ API Integration"
+description: "เชื่อมต่อ KBank K+ Payment Gateway API สำหรับรับชำระเงินออนไลน์ใน Laravel รวม OAuth payment request และ callback"
+topic: thai-context
+subtopic: payment
+tags:
+  - kbank
+  - kplus
+  - payment
+  - gateway
+  - laravel
+difficulty: advanced
+laravel_version: "11.x"
+verified_at: "2026-04-28"
+author: thaidevdocs-team
+contributors: []
+reading_time: 14
+is_premium: false
+---
+
+## KBank K+ Payment Gateway
+
+**KBank Open API** ให้ merchant รับชำระผ่าน K+ App และช่องทางอื่นของธนาคารกสิกรไทย — ต้อง register ผ่าน KBank Developer Portal
+
+---
+
+## Payment Flow
+
+```
+Customer เลือกชำระด้วย K+
+    ↓
+Laravel สร้าง Payment Request → KBank API
+    ↓
+Redirect/QR ไป K+ App
+    ↓
+Customer ยืนยันใน K+
+    ↓
+KBank callback → Laravel webhook
+    ↓
+อัปเดต order status
+```
+
+---
+
+## Configuration
+
+```bash
+# .env
+KBANK_CONSUMER_KEY=your-consumer-key
+KBANK_CONSUMER_SECRET=your-consumer-secret
+KBANK_MERCHANT_ID=your-merchant-id
+KBANK_TERMINAL_ID=your-terminal-id
+KBANK_SANDBOX=true
+```
+
+```php
+// config/services.php
+'kbank' => [
+    'consumer_key'    => env('KBANK_CONSUMER_KEY'),
+    'consumer_secret' => env('KBANK_CONSUMER_SECRET'),
+    'merchant_id'     => env('KBANK_MERCHANT_ID'),
+    'terminal_id'     => env('KBANK_TERMINAL_ID'),
+    'sandbox'         => env('KBANK_SANDBOX', true),
+    'base_url'        => env('KBANK_SANDBOX', true)
+        ? 'https://openapi-sandbox.kasikornbank.com'
+        : 'https://openapi.kasikornbank.com',
+],
+```
+
+---
+
+## OAuth2 Authentication
+
+```php
+// app/Services/KBankPaymentService.php
+class KBankPaymentService
+{
+    private ?string $accessToken = null;
+    private ?Carbon $tokenExpires = null;
+
+    public function authenticate(): string
+    {
+        if ($this->accessToken && $this->tokenExpires?->isFuture()) {
+            return $this->accessToken;
+        }
+
+        $credentials = base64_encode(
+            config('services.kbank.consumer_key') . ':' .
+            config('services.kbank.consumer_secret')
+        );
+
+        $response = Http::withHeaders([
+            'Authorization' => "Basic {$credentials}",
+            'Content-Type'  => 'application/x-www-form-urlencoded',
+        ])->asForm()->post(config('services.kbank.base_url') . '/oauth/token', [
+            'grant_type' => 'client_credentials',
+        ])->throw();
+
+        $this->accessToken = $response->json('access_token');
+        $this->tokenExpires = now()->addSeconds($response->json('expires_in') - 60);
+
+        return $this->accessToken;
+    }
+}
+```
+
+---
+
+## Create Payment
+
+```php
+public function createPayment(Order $order): array
+{
+    $token = $this->authenticate();
+    $reference = 'ORD-' . $order->order_number;
+
+    $response = Http::withToken($token)
+        ->post(config('services.kbank.base_url') . '/v1/qrpayment/request', [
+            'merchantId'    => config('services.kbank.merchant_id'),
+            'terminalId'    => config('services.kbank.terminal_id'),
+            'qrType'        => 'THQR',
+            'txnAmount'     => number_format($order->total, 2, '.', ''),
+            'txnCurrencyCode' => '764', // THB
+            'reference1'    => $reference,
+            'reference2'    => (string) $order->user_id,
+        ])->throw();
+
+    $data = $response->json();
+
+    Payment::create([
+        'order_id'       => $order->id,
+        'gateway'        => 'kbank',
+        'transaction_id' => $data['txnId'] ?? $reference,
+        'amount'         => $order->total,
+        'status'         => 'pending',
+        'metadata'       => $data,
+    ]);
+
+    return [
+        'qr_data'      => $data['qrData'] ?? null,
+        'qr_image'     => $data['qrImage'] ?? null,
+        'reference'    => $reference,
+        'expires_at'   => now()->addMinutes(10),
+    ];
+}
+```
+
+---
+
+## Callback Handler
+
+```php
+// app/Http/Controllers/KBankCallbackController.php
+class KBankCallbackController extends Controller
+{
+    public function __invoke(Request $request)
+    {
+        Log::info('KBank callback', $request->all());
+
+        $reference = $request->input('reference1');
+        $status = $request->input('status'); // 'success', 'failed'
+        $txnId = $request->input('txnId');
+        $amount = $request->input('txnAmount');
+
+        $orderNumber = str_replace('ORD-', '', $reference);
+        $order = Order::where('order_number', $orderNumber)->firstOrFail();
+
+        if ($status !== 'success') {
+            Payment::where('order_id', $order->id)->update(['status' => 'failed']);
+            return response()->json(['code' => '0000']);
+        }
+
+        if (abs((float) $amount - (float) $order->total) > 0.01) {
+            Log::error('KBank amount mismatch', compact('amount', 'order'));
+            return response()->json(['code' => '9999', 'message' => 'Amount mismatch'], 400);
+        }
+
+        DB::transaction(function () use ($order, $txnId, $request) {
+            $order->update(['status' => 'paid', 'paid_at' => now()]);
+            Payment::where('order_id', $order->id)->update([
+                'status'         => 'completed',
+                'transaction_id' => $txnId,
+                'paid_at'        => now(),
+                'metadata'       => $request->all(),
+            ]);
+        });
+
+        return response()->json(['code' => '0000', 'message' => 'Success']);
+    }
+}
+```
+
+<Callout type="tip">
+KBank callback ต้อง respond ด้วย `code: 0000` — ถ้าไม่ respond ถูกต้อง KBank จะ retry webhook
+</Callout>
+
+---
+
+## Idempotency
+
+```php
+public function handleCallback(Request $request): JsonResponse
+{
+    $txnId = $request->input('txnId');
+
+    // ป้องกัน process ซ้ำ
+    if (Payment::where('transaction_id', $txnId)->where('status', 'completed')->exists()) {
+        return response()->json(['code' => '0000', 'message' => 'Already processed']);
+    }
+
+    // ... process payment
+}
+```
+
+---
+
+## สรุป
+
+| Step | Detail |
+|---|---|
+| Auth | OAuth2 client_credentials |
+| Create payment | QR request API |
+| Callback | Verify amount + idempotency |
+| Response | `{ "code": "0000" }` |
+| Sandbox | KBank Open API Sandbox |
