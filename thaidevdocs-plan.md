@@ -1113,7 +1113,8 @@ Content strategy:
 
 **Content**
 - [x] 15+ articles ก่อน launch ทุก article มี frontmatter ครบ
-- [ ] ทุก code block ทดสอบแล้ว (runnable จริง)
+- [x] Content QA script (`npm run content:qa`) — language tags, links, JSON checks
+- [ ] ทุก code block ทดสอบแล้ว (runnable จริง) — ใช้ `--php` และ manual review
 - [x] ทุก article มี `laravel_version` หรือ `vue_version`
 - [x] Thai Context section อย่างน้อย 5 articles
 

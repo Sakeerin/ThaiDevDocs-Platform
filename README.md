@@ -33,6 +33,9 @@ Frontmatter is validated in `source.config.ts` using Zod. Required fields includ
 - `npm run types:check` - regenerate MDX types + TypeScript check
 - `npm run content:validate` - validate MDX frontmatter in `content/docs`
 - `npm run content:stale` - list articles with `verified_at` older than 6 months
+- `npm run content:qa` - QA code blocks (language tags, JSON syntax, internal links, optional PHP lint)
+- `npm run content:fix-fences` - auto-fix bare ` ``` ` fences to ` ```text `
+- `npm run content:check` - run validate + stale + QA together
 - `npm run vercel:pull` - pull Vercel preview environment variables
 - `npm run deploy:staging` - deploy preview build to Vercel
 

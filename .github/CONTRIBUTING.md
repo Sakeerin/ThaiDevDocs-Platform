@@ -47,7 +47,24 @@ $order = Order::find(1); // สมชาย ใจดี, ฿ (บาท)
 
 - Maintainer review ภายใน 3 วันทำการ
 - ถ้ายังไม่ได้ review ใน 5 วัน → ping maintainer ใน PR
-- GitHub Actions จะตรวจ frontmatter, stale content และ broken links
+- GitHub Actions จะตรวจ frontmatter, stale content, content QA และ broken links
+
+## Content QA ก่อนเปิด PR
+
+```bash
+npm run content:check
+```
+
+Script จะตรวจ:
+- frontmatter ครบถ้วน
+- code block มี language tag
+- internal links `/docs/...` ชี้ไปหน้าที่มีจริง
+- JSON blocks ไม่มี comment ปน (ใช้ `typescript` สำหรับ tsconfig)
+
+Optional flags:
+- `npm run content:qa -- --strict` — fail เมื่อมี warnings
+- `npm run content:qa -- --php` — lint PHP snippets (ถ้ามี PHP ใน PATH)
+- `npm run content:fix-fences` — แก้ bare ` ``` ` เป็น ` ```text ` อัตโนมัติ
 - ทุก PR จะได้ Vercel preview URL (เมื่อเชื่อม Vercel กับ repo แล้ว)
 
 ## Getting Help

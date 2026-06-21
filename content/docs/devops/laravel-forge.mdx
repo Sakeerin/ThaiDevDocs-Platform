@@ -39,7 +39,7 @@ Forge รองรับ DigitalOcean, AWS, Linode, Hetzner และ Vultr — 
 
 ## สร้าง Site
 
-```
+```text
 Domain: shop.example.com
 Project Type: Laravel
 Web Directory: /public
@@ -99,7 +99,7 @@ php artisan cache:clear
 
 Forge รองรับ **Deploy Script with Zero Downtime**:
 
-```
+```text
 /home/forge/shop.example.com/current  → symlink ไป release ล่าสุด
 /home/forge/shop.example.com/releases/  → เก็บ release เก่า
 ```
@@ -112,7 +112,7 @@ Enable ใน Site Settings → Deployment → Zero Downtime Deployments
 
 Forge UI → Site → Queue:
 
-```
+```text
 Connection: redis
 Queue: default
 Processes: 2
@@ -138,7 +138,7 @@ numprocs=2
 
 Forge ตั้ง cron ให้อัตโนมัติ:
 
-```
+```text
 * * * * * cd /home/forge/shop.example.com && php artisan schedule:run >> /dev/null 2>&1
 ```
 
