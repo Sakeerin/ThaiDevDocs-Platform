@@ -11,6 +11,8 @@ Bootstrapped docs platform using Next.js + Fumadocs + typed MDX content.
 
 ## Local Development
 
+See the full guide: **[docs/DEVELOPMENT-GUIDE.md](docs/DEVELOPMENT-GUIDE.md)** (setup, env, deploy, troubleshooting).
+
 ```bash
 npm install
 npm run dev
