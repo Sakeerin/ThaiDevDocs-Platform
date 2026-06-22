@@ -1,0 +1,224 @@
+---
+title: "Production Deployment Checklist ฉบับสมบูรณ์ (Pro)"
+description: "Checklist deploy Laravel 11 ขึ้น production — server, env, CI/CD, queue, backup, monitoring และ rollback สำหรับระบบไทย"
+topic: devops
+subtopic: deployment
+tags:
+  - deployment
+  - production
+  - checklist
+  - laravel
+  - devops
+difficulty: advanced
+verified_at: "2026-06-21"
+author: thaidevdocs-team
+contributors: []
+reading_time: 18
+is_premium: true
+---
+
+## ก่อน Deploy — Pre-flight
+
+### Environment
+
+```ini
+APP_ENV=production
+APP_DEBUG=false
+APP_URL=https://app.yourdomain.co.th
+
+LOG_CHANNEL=stack
+LOG_LEVEL=warning
+```
+
+- [ ] `.env` ไม่ commit ลง git
+- [ ] `APP_KEY` generate แล้ว (`php artisan key:generate`)
+- [ ] `APP_URL` ตรงกับ domain จริง (HTTPS)
+- [ ] Timezone `Asia/Bangkok`
+
+ดู: [จัดการ Environment Variables](/docs/devops/env-management)
+
+---
+
+## Server & PHP
+
+| รายการ | ค่าแนะนำ |
+|---|---|
+| PHP | 8.2+ |
+| Extensions | bcmath, ctype, curl, dom, fileinfo, json, mbstring, openssl, pdo, tokenizer, xml |
+| Web server | Nginx + PHP-FPM |
+| Process manager | Supervisor (queue + scheduler) |
+
+```bash
+php -v
+php -m | grep -E 'redis|pdo_mysql|opcache'
+```
+
+- [ ] OPcache เปิดบน production
+- [ ] `upload_max_filesize` / `post_max_size` ตาม use case
+- [ ] Disk space ≥ 20% free
+
+ดู: [Nginx สำหรับ Laravel](/docs/devops/nginx-laravel)
+
+---
+
+## Database & Redis
+
+```ini
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_DATABASE=app_production
+DB_USERNAME=app_user
+
+CACHE_STORE=redis
+SESSION_DRIVER=redis
+QUEUE_CONNECTION=redis
+```
+
+- [ ] DB user มีสิทธิ์เฉพาะที่จำเป็น (ไม่ใช้ root)
+- [ ] Migration รันบน staging ก่อน production
+- [ ] Backup อัตโนมัติรายวัน + ทดสอบ restore
+- [ ] Redis persistence (RDB/AOF) ถ้า queue critical
+
+ดู: [Redis กับ Laravel](/docs/devops/redis-laravel), [MySQL Optimization](/docs/devops/mysql-optimization)
+
+---
+
+## Deploy Script
+
+```bash
+#!/bin/bash
+set -e
+
+cd /var/www/app
+git pull origin main
+composer install --no-dev --optimize-autoloader
+npm ci && npm run build
+
+php artisan migrate --force
+php artisan config:cache
+php artisan route:cache
+php artisan view:cache
+php artisan event:cache
+
+php artisan queue:restart
+sudo systemctl reload php8.2-fpm
+```
+
+- [ ] `--force` migrate เฉพาะ production ที่ review แล้ว
+- [ ] Zero-downtime: blue-green หรือ `php artisan down` สั้นๆ
+- [ ] Asset version ใหม่ (Vite manifest)
+
+ดู: [GitHub Actions สำหรับ Laravel](/docs/devops/github-actions-laravel)
+
+---
+
+## Queue & Scheduler
+
+```ini
+# /etc/supervisor/conf.d/laravel-worker.conf
+[program:laravel-worker]
+process_name=%(program_name)s_%(process_num)02d
+command=php /var/www/app/artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
+autostart=true
+autorestart=true
+numprocs=2
+user=www-data
+```
+
+```bash
+# crontab -e
+* * * * * cd /var/www/app && php artisan schedule:run >> /dev/null 2>&1
+```
+
+- [ ] Failed jobs monitor (`php artisan queue:failed`)
+- [ ] Horizon ถ้า queue ซับซ้อน
+- [ ] Job timeout ตั้งตาม external API (Omise, LINE)
+
+---
+
+## Security (Pre-launch)
+
+- [ ] HTTPS + HSTS
+- [ ] Firewall (UFW): เปิด 22, 80, 443 เท่านั้น
+- [ ] SSH key only (ปิด password login)
+- [ ] Rate limit API และ login
+- [ ] CORS จำกัด domain
+- [ ] Secrets ใน vault/env — ไม่ใน code
+
+---
+
+## Monitoring & Alerts
+
+- [ ] Uptime check (UptimeRobot, Better Stack)
+- [ ] Error tracking (Sentry, Flare)
+- [ ] Log aggregation
+- [ ] Disk / CPU / memory alerts
+- [ ] SSL expiry alert
+
+ดู: [Laravel Monitoring](/docs/devops/laravel-monitoring)
+
+---
+
+## PDPA & ข้อมูลไทย
+
+- [ ] Privacy policy และ cookie consent
+- [ ] Log ไม่เก็บ PII เกินจำเป็น
+- [ ] Data retention policy
+- [ ] ข procedure ลบข้อมูลตามคำขอ (DSAR)
+
+ดู: [PDPA สำหรับ Developer](/docs/thai-context/pdpa)
+
+---
+
+## Rollback Plan
+
+```bash
+# 1. Maintenance mode
+php artisan down --secret="rollback-token"
+
+# 2. Revert code
+git checkout <previous-tag>
+composer install --no-dev --optimize-autoloader
+
+# 3. Rollback migration (ถ้าจำเป็น — ระวัง data loss)
+php artisan migrate:rollback --step=1
+
+# 4. Clear cache & up
+php artisan optimize:clear
+php artisan up
+```
+
+- [ ] Tag release ทุก deploy (`v1.2.3`)
+- [ ] DB backup ก่อน migrate ใหญ่
+- [ ] Runbook rollback แชร์ในทีม
+
+---
+
+## Post-deploy Smoke Test
+
+```bash
+curl -sf https://app.yourdomain.co.th/health
+curl -sf -o /dev/null -w "%{http_code}" https://app.yourdomain.co.th/login
+```
+
+- [ ] Login / checkout / webhook endpoint
+- [ ] Queue processing job ทดสอบ
+- [ ] Email/LINE notification ส่งได้
+- [ ] Plausible/analytics รับ event
+
+---
+
+## สรุป Checklist แบบ One-pager
+
+```text
+□ APP_DEBUG=false
+□ Migrate + cache
+□ Queue workers running
+□ Scheduler cron
+□ Backup + restore tested
+□ HTTPS + monitoring
+□ Rollback tag พร้อม
+□ Smoke test ผ่าน
+```
+
+Checklist นี้ครอบคลุม deploy Laravel production สำหรับธุรกิจไทย — ปรับตาม stack (Forge, Docker, Azure) ตาม [DevOps docs](/docs/devops)

@@ -1,0 +1,145 @@
+---
+title: "Microservices กับ Laravel — เมื่อไหร่แยก Service"
+description: "แนวทางแยก monolith เป็น microservices ด้วย Laravel — HTTP, events, queue และข้อดีข้อเสียสำหรับทีมไทย"
+topic: laravel
+subtopic: architecture
+tags:
+  - microservices
+  - architecture
+  - api
+  - laravel
+  - events
+difficulty: advanced
+laravel_version: "11.x"
+verified_at: "2026-06-21"
+author: thaidevdocs-team
+contributors: []
+reading_time: 14
+is_premium: false
+---
+
+## Monolith ก่อน — Microservices ทีหลัง
+
+Startup และ SME ไทยส่วนใหญ่เริ่มจาก **modular monolith** — แยก microservice เมื่อมี pain จริง: team แยก deploy, scale ไม่เท่ากัน, หรือ technology ต่างกัน
+
+<Callout type="info">
+ถ้า team < 5 คน และ deploy วันละครั้ง — monolith + queue มักเพียงพอ
+</Callout>
+
+---
+
+## จุดแยก Service ที่สมเหตุสมผล
+
+| Service | ตัวอย่าง (ร้านออนไลน์ไทย) |
+|---|---|
+| **Catalog** | สินค้า, ราคา, สต็อก |
+| **Order** | คำสั่งซื้อ, สถานะ |
+| **Payment** | Omise, PromptPay webhook |
+| **Notification** | LINE, SMS, email |
+| **Identity** | Login, PDPA consent |
+
+แต่ละ service เป็น Laravel app แยก repo หรือ module ใน monorepo
+
+---
+
+## สื่อสารระหว่าง Service
+
+### 1. HTTP (Sync)
+
+```php
+// Order Service เรียก Payment Service
+$response = Http::withToken(config('services.payment.internal_token'))
+    ->timeout(5)
+    ->post('https://payment.internal/api/charges', [
+        'order_id' => $order->id,
+        'amount' => $order->total,
+        'currency' => 'THB',
+    ]);
+
+if ($response->failed()) {
+    throw new PaymentServiceUnavailable();
+}
+```
+
+ใช้ **circuit breaker** และ retry with backoff — อย่า chain sync ยาวเกิน 2 hop
+
+### 2. Events + Queue (Async)
+
+```php
+// Order Service — หลัง order paid
+event(new OrderPaid($order->id, $order->total));
+
+// Notification Service — listener บน queue
+class SendLineReceipt implements ShouldQueue
+{
+    public function handle(OrderPaid $event): void
+    {
+        LineMessaging::push($event->userId, "ขอบคุณสำหรับคำสั่งซื้อ ฿{$event->total}");
+    }
+}
+```
+
+ดู: [Queue & Jobs](/docs/laravel/queue-jobs)
+
+---
+
+## Shared Database vs Database per Service
+
+**Database per service** (แนะนำเมื่อ scale จริง):
+- ไม่ JOIN ข้าม service
+- ใช้ `order_id` เป็น correlation ID
+- eventual consistency ผ่าน events
+
+**Shared DB** (transitional):
+- เร็วขึ้นตอน migrate
+- แต่ coupling สูง — วางแผนแยก schema ทีละ domain
+
+---
+
+## API Gateway & Auth
+
+```text
+Client → API Gateway (Nginx / Kong)
+           ├── catalog.api.internal
+           ├── order.api.internal
+           └── payment.api.internal
+```
+
+- **JWT หรือ Sanctum** ออก token ที่ gateway
+- Internal service ใช้ mTLS หรือ shared secret
+- Rate limit ที่ gateway สำหรับ public API
+
+---
+
+## Observability
+
+แยก service แล้ว debug ยากขึ้น — ต้องมี:
+
+- **Correlation ID** ใน header ทุก request
+- Centralized logging (Papertrail, CloudWatch)
+- Health check `/health` ต่อ service
+
+```php
+// Middleware
+public function handle($request, Closure $next)
+{
+    $id = $request->header('X-Request-Id') ?? Str::uuid();
+    Log::withContext(['request_id' => $id]);
+    return $next($request);
+}
+```
+
+---
+
+## Migration Path
+
+1. **Extract module** ใน monolith (bounded context ชัด)
+2. **Dual write** หรือ read replica ชั่วคราว
+3. **Strangle** — route traffic ไป service ใหม่ทีละ endpoint
+4. **Retire** code เก่าใน monolith
+
+---
+
+## สรุป
+
+Microservices กับ Laravel ทำได้ดีเมื่อแยก domain ชัด, ใช้ queue สำหรับ async, และทีมพร้อม ops — อย่าแยกเพราะ trend อย่างเดียว

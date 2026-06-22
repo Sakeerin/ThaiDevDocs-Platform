@@ -943,18 +943,18 @@ Thai Context เพิ่มเติม (7 articles):
 ### Phase 3: Community-driven Growth (เดือน 3+)
 
 **รับ PR จาก community:**
-- [ ] Laravel Testing ขั้นสูง (feature tests, mocking)
-- [ ] Livewire + Alpine.js
-- [ ] Laravel Octane + Swoole
-- [ ] Microservices กับ Laravel
-- [ ] GraphQL ใน Laravel
-- [ ] Performance optimization ขั้นสูง
+- [x] Laravel Testing ขั้นสูง (feature tests, mocking)
+- [x] Livewire + Alpine.js
+- [x] Laravel Octane + Swoole
+- [x] Microservices กับ Laravel
+- [x] GraphQL ใน Laravel
+- [x] Performance optimization ขั้นสูง
 
 **Premium Content (Pro only):**
 - [x] สร้าง SaaS ด้วย Laravel — full guide
-- [ ] Production deployment checklist ฉบับสมบูรณ์
-- [ ] Security hardening ใน Laravel
-- [ ] Database design สำหรับ Thai business
+- [x] Production deployment checklist ฉบับสมบูรณ์
+- [x] Security hardening ใน Laravel
+- [x] Database design สำหรับ Thai business
 
 ### Content Quality Metrics
 

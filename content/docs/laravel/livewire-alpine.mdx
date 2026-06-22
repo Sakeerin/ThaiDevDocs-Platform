@@ -1,0 +1,184 @@
+---
+title: "Livewire + Alpine.js — Interactive UI โดยไม่ต้อง SPA"
+description: "สร้าง UI แบบ reactive ด้วย Livewire 3 และ Alpine.js ใน Laravel — modal, dropdown, form validation แบบ real-time"
+topic: laravel
+subtopic: frontend
+tags:
+  - livewire
+  - alpine
+  - frontend
+  - laravel
+  - ui
+difficulty: intermediate
+laravel_version: "11.x"
+verified_at: "2026-06-21"
+author: thaidevdocs-team
+contributors: []
+reading_time: 12
+is_premium: false
+---
+
+## ทำไม Livewire + Alpine?
+
+**Livewire** จัดการ state และ server logic บน PHP — **Alpine.js** จัดการ UI micro-interactions (toggle, animation) โดยไม่ต้องเขียน Vue/React ทั้งหน้า
+
+เหมาะกับ admin panel, form ซับซ้อน, และ dashboard ร้านค้าไทยที่ต้องการ UX ดีแต่ทีม backend-heavy
+
+---
+
+## ติดตั้ง Livewire 3
+
+```bash
+composer require livewire/livewire
+php artisan livewire:publish --config
+```
+
+```bash
+php artisan make:livewire ProductSearch
+```
+
+---
+
+## Component พื้นฐาน
+
+```php
+// app/Livewire/ProductSearch.php
+namespace App\Livewire;
+
+use App\Models\Product;
+use Livewire\Component;
+use Livewire\WithPagination;
+
+class ProductSearch extends Component
+{
+    use WithPagination;
+
+    public string $query = '';
+    public string $category = '';
+
+    public function updatedQuery(): void
+    {
+        $this->resetPage();
+    }
+
+    public function render()
+    {
+        $products = Product::query()
+            ->when($this->query, fn ($q) => $q->where('name', 'like', "%{$this->query}%"))
+            ->when($this->category, fn ($q) => $q->where('category', $this->category))
+            ->paginate(12);
+
+        return view('livewire.product-search', compact('products'));
+    }
+}
+```
+
+```blade
+{{-- resources/views/livewire/product-search.blade.php --}}
+<div>
+    <input
+        wire:model.live.debounce.300ms="query"
+        type="search"
+        placeholder="ค้นหาสินค้า..."
+        class="w-full rounded-lg border px-4 py-2"
+    />
+
+    <select wire:model.live="category" class="mt-2 rounded-lg border px-3 py-2">
+        <option value="">ทุกหมวด</option>
+        <option value="food">อาหาร</option>
+        <option value="fashion">แฟชั่น</option>
+    </select>
+
+    <div class="mt-4 grid gap-4 sm:grid-cols-3">
+        @foreach ($products as $product)
+            <div wire:key="product-{{ $product->id }}" class="rounded-xl border p-4">
+                <p class="font-medium">{{ $product->name }}</p>
+                <p class="text-emerald-600">฿{{ number_format($product->price) }}</p>
+            </div>
+        @endforeach
+    </div>
+
+    {{ $products->links() }}
+</div>
+```
+
+---
+
+## Alpine.js สำหรับ Modal
+
+Livewire 3 มาพร้อม Alpine — ใช้ `@entangle` หรือ `wire:click` ร่วมกัน:
+
+```blade
+<div x-data="{ open: @entangle('showModal') }">
+    <button @click="open = true" class="rounded-lg bg-emerald-600 px-4 py-2 text-white">
+        เพิ่มสินค้า
+    </button>
+
+    <div
+        x-show="open"
+        x-transition
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+        @keydown.escape.window="open = false"
+    >
+        <div class="w-full max-w-md rounded-xl bg-white p-6" @click.outside="open = false">
+            <h2 class="text-lg font-semibold">เพิ่มสินค้าใหม่</h2>
+            {{-- Livewire form fields --}}
+            <button wire:click="save" class="mt-4 rounded-lg bg-emerald-600 px-4 py-2 text-white">
+                บันทึก
+            </button>
+        </div>
+    </div>
+</div>
+```
+
+---
+
+## Real-time Validation
+
+```php
+public function rules(): array
+{
+    return [
+        'name' => 'required|min:3',
+        'price' => 'required|numeric|min:1',
+        'sku' => 'required|unique:products,sku',
+    ];
+}
+
+public function updated($property): void
+{
+    $this->validateOnly($property);
+}
+```
+
+```blade
+<input wire:model.blur="name" type="text" />
+@error('name') <span class="text-red-500 text-sm">{{ $message }}</span> @enderror
+```
+
+---
+
+## Loading States
+
+```blade
+<button wire:click="checkout" wire:loading.attr="disabled">
+    <span wire:loading.remove>ชำระเงิน ฿{{ number_format($total) }}</span>
+    <span wire:loading>กำลังดำเนินการ...</span>
+</button>
+```
+
+---
+
+## เมื่อไหร่ใช้ Livewire vs Vue/Inertia
+
+| สถานการณ์ | แนะนำ |
+|---|---|
+| Admin CRUD, filter, modal | Livewire + Alpine |
+| SPA ขนาดใหญ่, offline | Vue/Inertia |
+| Marketing page นิ่ง | Blade ธรรมดา |
+
+---
+
+## สรุป
+
+Livewire + Alpine ลดความซับซ้อนของ frontend stack — state อยู่ฝั่ง server, validation ใช้ Laravel rules เดิม, deploy ง่ายกว่าแยก SPA

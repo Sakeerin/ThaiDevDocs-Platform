@@ -1,0 +1,222 @@
+---
+title: "Database Design สำหรับ Thai Business (Pro)"
+description: "Schema patterns สำหรับธุรกิจไทย — ที่อยู่, เลขประจำตัว, VAT, สกุลเงิน, multi-branch และ PDPA fields"
+topic: laravel
+subtopic: database
+tags:
+  - database
+  - schema
+  - thai
+  - pdpa
+  - laravel
+difficulty: advanced
+laravel_version: "11.x"
+verified_at: "2026-06-21"
+author: thaidevdocs-team
+contributors: []
+reading_time: 17
+is_premium: true
+---
+
+## ออกแบบ Schema ให้ตรงบริบทไทย
+
+Database design ที่ดีรองรับ regulation, locale และ business rule ไทย — ไม่ใช่แค่ copy schema จาก tutorial ต่างประเทศ
+
+---
+
+## Users & Identity
+
+```php
+Schema::create('users', function (Blueprint $table) {
+    $table->id();
+    $table->string('name');
+    $table->string('email')->unique()->nullable();
+    $table->string('phone', 20)->unique(); // 0812345678 normalized
+    $table->timestamp('phone_verified_at')->nullable();
+    $table->string('locale', 5)->default('th');
+    $table->string('timezone', 50)->default('Asia/Bangkok');
+    $table->timestamps();
+    $table->softDeletes();
+});
+```
+
+**เบอร์โทร:** เก็บ normalized (E.164 หรือ local 10 หลัก) — validate แยก display format
+
+```php
+// Display: 081-234-5678 | Store: 0812345678
+```
+
+**เลขบัตรประชาชน:** เก็บ encrypted, ไม่ index plain text
+
+```php
+$table->text('national_id_encrypted')->nullable();
+$table->string('national_id_hash', 64)->nullable()->index(); // สำหรับ dedup
+```
+
+---
+
+## Thai Address Model
+
+```php
+Schema::create('addresses', function (Blueprint $table) {
+    $table->id();
+    $table->morphs('addressable');
+    $table->string('label')->nullable(); // บ้าน, ที่ทำงาน
+    $table->string('line1'); // บ้านเลขที่ ซอย
+    $table->string('line2')->nullable();
+    $table->string('subdistrict'); // ตำบล/แขวง
+    $table->string('district'); // อำเภอ/เขต
+    $table->string('province');
+    $table->string('postal_code', 5);
+    $table->decimal('latitude', 10, 7)->nullable();
+    $table->decimal('longitude', 10, 7)->nullable();
+    $table->boolean('is_default')->default(false);
+    $table->timestamps();
+});
+```
+
+- ใช้ master data จังหวัด/อำเภอ/ตำบล (JSON หรือ table แยก)
+- รหัสไปรษณีย์ 5 หลัก validate ตาม province
+
+ดู: [รูปแบบวันที่ไทย](/docs/thai-context/thai-date-format)
+
+---
+
+## Business / Shop (VAT & Tax ID)
+
+```php
+Schema::create('shops', function (Blueprint $table) {
+    $table->id();
+    $table->string('name');
+    $table->string('tax_id', 13)->nullable(); // เลขประจำตัวผู้เสียภาษี
+    $table->string('branch_code', 5)->default('00000'); // สำนักงานใหญ่
+    $table->boolean('vat_registered')->default(false);
+    $table->decimal('vat_rate', 5, 2)->default(7.00);
+    $table->string('invoice_prefix', 10)->nullable();
+    $table->unsignedBigInteger('next_invoice_number')->default(1);
+    $table->timestamps();
+});
+```
+
+**Invoice numbering:** atomic increment — ใช้ DB transaction หรือ dedicated sequence table
+
+```php
+DB::transaction(function () use ($shop) {
+    $number = $shop->lockForUpdate()->next_invoice_number;
+    $shop->increment('next_invoice_number');
+    return "{$shop->invoice_prefix}-{$number}";
+});
+```
+
+---
+
+## Money & Orders
+
+```php
+Schema::create('orders', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('shop_id')->constrained();
+    $table->foreignId('user_id')->nullable()->constrained();
+    $table->unsignedBigInteger('subtotal'); // satang (1 ฿ = 100)
+    $table->unsignedBigInteger('vat_amount');
+    $table->unsignedBigInteger('total');
+    $table->char('currency', 3)->default('THB');
+    $table->string('status', 30)->index();
+    $table->string('payment_method')->nullable(); // promptpay, card
+    $table->string('payment_ref')->nullable()->index();
+    $table->timestamp('paid_at')->nullable();
+    $table->timestamps();
+
+    $table->index(['shop_id', 'status', 'created_at']);
+});
+```
+
+<Callout type="info">
+เก็บเงินเป็น **integer satang** — หลีกเลี่ยง float สำหรับ financial calculation
+</Callout>
+
+```php
+// Model accessor
+public function getTotalBahtAttribute(): string
+{
+    return number_format($this->total / 100, 2);
+}
+```
+
+---
+
+## PDPA Consent
+
+```php
+Schema::create('consent_records', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('user_id')->constrained();
+    $table->string('purpose'); // marketing, analytics, payment
+    $table->string('version', 20); // policy v2026-01
+    $table->boolean('granted');
+    $table->string('ip', 45)->nullable();
+    $table->text('user_agent')->nullable();
+    $table->timestamp('consented_at');
+    $table->timestamp('withdrawn_at')->nullable();
+});
+```
+
+- ไม่ลบ consent history — audit trail
+- Marketing opt-in แยกจาก terms of service
+
+---
+
+## Multi-branch / Franchise
+
+```php
+Schema::create('branches', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('shop_id')->constrained();
+    $table->string('name');
+    $table->string('code', 20)->unique();
+    $table->foreignId('address_id')->nullable()->constrained();
+    $table->boolean('is_active')->default(true);
+});
+
+// orders.branch_id สำหรับ report รายสาขา
+```
+
+Row-level scope ด้วย [Global Scopes](/docs/laravel/eloquent-scopes):
+
+```php
+static::addGlobalScope('branch', function ($query) {
+    if ($branchId = auth()->user()?->branch_id) {
+        $query->where('branch_id', $branchId);
+    }
+});
+```
+
+---
+
+## Indexing สำหรับ Query ไทย
+
+```php
+// ค้นหาชื่อร้าน — FULLTEXT สำหรับ MySQL
+$table->fullText(['name', 'description']);
+
+// หรือ Algolia/Meilisearch สำหรับ fuzzy Thai search
+```
+
+---
+
+## Migration Checklist
+
+| รายการ | ตรวจ |
+|---|---|
+| FK constraints | ☐ |
+| Index ตาม query pattern | ☐ |
+| Soft delete ที่จำเป็น | ☐ |
+| Encrypted PII fields | ☐ |
+| Seed master จังหวัด | ☐ |
+| Rollback tested | ☐ |
+
+---
+
+## สรุป
+
+Schema สำหรับธุรกิจไทยต้องรองรับที่อยู่ไทย, VAT, satang, PDPA consent และ multi-branch — ออกแบบตั้งแต่ต้นจะลด refactor ภายหลัง

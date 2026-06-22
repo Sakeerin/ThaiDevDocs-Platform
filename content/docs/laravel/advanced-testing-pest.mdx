@@ -1,0 +1,209 @@
+---
+title: "Laravel Testing ขั้นสูงด้วย Pest — Feature Tests & Mocking"
+description: "Feature tests, HTTP assertions, database testing, mocking external APIs และ test organization สำหรับ Laravel 11 ด้วย Pest"
+topic: laravel
+subtopic: testing
+tags:
+  - testing
+  - pest
+  - feature-test
+  - mocking
+  - laravel
+difficulty: advanced
+laravel_version: "11.x"
+verified_at: "2026-06-21"
+author: thaidevdocs-team
+contributors: []
+reading_time: 14
+is_premium: false
+---
+
+## จาก Unit Test สู่ Feature Test
+
+Unit test ดีสำหรับ business logic แต่ **feature test** จำลอง HTTP request จริง — ครอบคลุม routing, middleware, validation และ database
+
+<Callout type="info">
+อ่านพื้นฐานก่อน: [Testing ด้วย Pest](/docs/laravel/testing-pest)
+</Callout>
+
+---
+
+## Feature Test พื้นฐาน
+
+```php
+// tests/Feature/CheckoutTest.php
+use App\Models\User;
+use App\Models\Product;
+
+test('ลูกค้าสามารถ checkout สินค้าได้', function () {
+    $user = User::factory()->create();
+    $product = Product::factory()->create(['price' => 1500]);
+
+    $response = $this->actingAs($user)->post('/checkout', [
+        'product_id' => $product->id,
+        'quantity' => 2,
+    ]);
+
+    $response->assertRedirect('/orders/thank-you');
+    $this->assertDatabaseHas('orders', [
+        'user_id' => $user->id,
+        'total' => 3000,
+    ]);
+});
+```
+
+---
+
+## RefreshDatabase
+
+ใช้ migration จริงใน test database — เร็วกว่า `DatabaseMigrations` สำหรับ suite ใหญ่:
+
+```php
+// tests/Pest.php
+uses(Tests\TestCase::class, Illuminate\Foundation\Testing\RefreshDatabase::class)
+    ->in('Feature');
+```
+
+<Callout type="warning">
+อย่าใช้ `RefreshDatabase` กับ production DB connection — ตั้ง `DB_DATABASE=testing` ใน `phpunit.xml`
+</Callout>
+
+---
+
+## HTTP Assertions ที่ใช้บ่อย
+
+```php
+$response->assertOk();
+$response->assertStatus(422);
+$response->assertJson(['message' => 'สินค้าหมด']);
+$response->assertJsonStructure(['data' => ['id', 'total', 'status']]);
+$response->assertSessionHas('success');
+$response->assertForbidden();
+```
+
+---
+
+## Mock External API (Omise / LINE)
+
+อย่าเรียก API จริงใน test — mock HTTP client:
+
+```php
+use Illuminate\Support\Facades\Http;
+
+test('สร้าง PromptPay charge สำเร็จ', function () {
+    Http::fake([
+        'api.omise.co/*' => Http::response([
+            'id' => 'chrg_test_xxx',
+            'status' => 'pending',
+        ], 200),
+    ]);
+
+    $response = $this->postJson('/api/payments/promptpay', [
+        'amount' => 9900,
+    ]);
+
+    $response->assertOk()
+        ->assertJsonPath('status', 'pending');
+});
+```
+
+---
+
+## Mock Facade และ Events
+
+```php
+use Illuminate\Support\Facades\Mail;
+use App\Mail\OrderConfirmed;
+
+test('ส่งอีเมลยืนยันหลัง checkout', function () {
+    Mail::fake();
+
+    // ... trigger checkout ...
+
+    Mail::assertSent(OrderConfirmed::class, function ($mail) {
+        return $mail->hasTo('somchai@example.com');
+    });
+});
+```
+
+```php
+use Illuminate\Support\Facades\Event;
+use App\Events\OrderPlaced;
+
+test('dispatch OrderPlaced event', function () {
+    Event::fake();
+
+    // ... place order ...
+
+    Event::assertDispatched(OrderPlaced::class);
+});
+```
+
+---
+
+## Policy & Authorization Tests
+
+```php
+test('พนักงานทั่วไปแก้ order ของร้านอื่นไม่ได้', function () {
+    $staff = User::factory()->create(['role' => 'staff']);
+    $order = Order::factory()->for(Shop::factory())->create();
+
+    $response = $this->actingAs($staff)->patch("/orders/{$order->id}", [
+        'status' => 'cancelled',
+    ]);
+
+    $response->assertForbidden();
+});
+```
+
+ดูเพิ่ม: [Policies & Gates](/docs/laravel/policies-gates)
+
+---
+
+## Datasets สำหรับ Validation
+
+```php
+test('validate เบอร์โทรไทย', function (string $phone, bool $valid) {
+    $response = $this->postJson('/register', ['phone' => $phone]);
+
+    $valid
+        ? $response->assertOk()
+        : $response->assertUnprocessable();
+})->with([
+    ['0812345678', true],
+    ['081234567', false],
+    ['66123456789', false],
+]);
+```
+
+---
+
+## Organization Tips
+
+```text
+tests/
+├── Feature/
+│   ├── Auth/
+│   ├── Checkout/
+│   └── Api/
+├── Unit/
+│   └── Services/
+└── Pest.php
+```
+
+- 1 test file ต่อ 1 endpoint หรือ use case
+- ใช้ `beforeEach()` สำหรับ setup ซ้ำ
+- ตั้งชื่อ test เป็นภาษาไทยหรืออังกฤษที่อ่านแล้วเข้าใจ behavior
+
+---
+
+## สรุป
+
+| ประเภท | ใช้เมื่อ |
+|---|---|
+| Unit | Logic แยก class/service |
+| Feature | HTTP + DB + auth flow |
+| Mock HTTP | External API (Omise, LINE) |
+| Fake Mail/Event | Side effects ที่ไม่ต้อง test จริง |
+
+Feature tests คือ safety net ก่อน deploy — โดยเฉพาะ flow ชำระเงินและ PDPA consent

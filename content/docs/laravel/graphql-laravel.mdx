@@ -1,0 +1,215 @@
+---
+title: "GraphQL ใน Laravel — API ยืดหยุ่นด้วย Lighthouse"
+description: "ติดตั้ง Lighthouse GraphQL ใน Laravel 11 — schema, resolver, authorization และเมื่อไหร่เลือก GraphQL แทน REST"
+topic: laravel
+subtopic: api
+tags:
+  - graphql
+  - api
+  - lighthouse
+  - laravel
+difficulty: advanced
+laravel_version: "11.x"
+verified_at: "2026-06-21"
+author: thaidevdocs-team
+contributors: []
+reading_time: 13
+is_premium: false
+---
+
+## GraphQL vs REST
+
+**REST** — endpoint ตายตัว, over-fetching/under-fetching บ่อย  
+**GraphQL** — client เลือก field ที่ต้องการใน query เดียว
+
+เหมาะกับ mobile app และ dashboard ที่ UI ต้องการ data shape ต่างกัน — แต่ complexity สูงกว่า REST
+
+<Callout type="info">
+ถ้า API มี consumer เดียวและ schema นิ่ง — REST + [API Resources](/docs/laravel/api-resources) มักพอ
+</Callout>
+
+---
+
+## ติดตั้ง Lighthouse
+
+```bash
+composer require nuwave/lighthouse
+php artisan vendor:publish --tag=lighthouse-schema
+```
+
+Schema อยู่ที่ `graphql/schema.graphql`
+
+---
+
+## Schema พื้นฐาน
+
+```graphql
+# graphql/schema.graphql
+type Query {
+    products(category: String, search: String): [Product!]!
+        @paginate(defaultCount: 12)
+    product(id: ID! @eq): Product @find
+}
+
+type Product {
+    id: ID!
+    name: String!
+    price: Float!
+    category: String!
+    shop: Shop! @belongsTo
+}
+
+type Shop {
+    id: ID!
+    name: String!
+    province: String
+}
+```
+
+Lighthouse map `@paginate`, `@find`, `@belongsTo` ไป Eloquent โดยตรง — ลด boilerplate
+
+---
+
+## Model & Migration
+
+```php
+// app/Models/Product.php
+class Product extends Model
+{
+    protected $fillable = ['name', 'price', 'category', 'shop_id'];
+
+    public function shop(): BelongsTo
+    {
+        return $this->belongsTo(Shop::class);
+    }
+}
+```
+
+---
+
+## Query ตัวอย่าง (Client)
+
+```graphql
+query SearchProducts {
+  products(search: "ข้าว", category: "food", first: 10) {
+    data {
+      id
+      name
+      price
+      shop {
+        name
+        province
+      }
+    }
+    paginatorInfo {
+      total
+      currentPage
+    }
+  }
+}
+```
+
+Client ได้เฉพาะ field ที่ขอ — ลด payload สำหรับ mobile บน 4G ไทย
+
+---
+
+## Authorization
+
+```graphql
+type Mutation {
+    updateProduct(id: ID!, input: UpdateProductInput!): Product
+        @update
+        @can(ability: "update", find: "id")
+}
+```
+
+```php
+// app/Policies/ProductPolicy.php
+public function update(User $user, Product $product): bool
+{
+    return $user->shop_id === $product->shop_id;
+}
+```
+
+ดู: [Policies & Gates](/docs/laravel/policies-gates)
+
+---
+
+## N+1 และ @with
+
+```graphql
+type Product {
+    shop: Shop! @belongsTo
+}
+```
+
+```php
+// หรือใช้ directive
+products: [Product!]! @paginate(scopes: ["withShop"])
+```
+
+```php
+// app/Models/Product.php
+public function scopeWithShop($query)
+{
+    return $query->with('shop');
+}
+```
+
+ดู: [Eager Loading](/docs/laravel/eager-loading)
+
+---
+
+## Custom Resolver
+
+```php
+// app/GraphQL/Queries/FeaturedProducts.php
+namespace App\GraphQL\Queries;
+
+class FeaturedProducts
+{
+    public function __invoke($_, array $args)
+    {
+        return Product::query()
+            ->where('is_featured', true)
+            ->where('province', $args['province'] ?? 'กรุงเทพมหานคร')
+            ->limit(6)
+            ->get();
+    }
+}
+```
+
+```graphql
+featuredProducts(province: String): [Product!]!
+    @field(resolver: "App\\GraphQL\\Queries\\FeaturedProducts")
+```
+
+---
+
+## Rate Limiting
+
+```php
+// config/lighthouse.php
+'route' => [
+    'middleware' => ['api', 'throttle:graphql'],
+],
+```
+
+```php
+// AppServiceProvider
+RateLimiter::for('graphql', fn () => Limit::perMinute(60)->by(request()->user()?->id ?: request()->ip()));
+```
+
+---
+
+## เมื่อไหร่ไม่ควรใช้ GraphQL
+
+- Public API ที่ต้องการ cache CDN ง่าย (REST GET cacheable)
+- Team ไม่คุ้น schema evolution
+- File upload ง่ายๆ — REST multipart ตรงไปตรงมากว่า
+
+---
+
+## สรุป
+
+GraphQL + Lighthouse ใน Laravel ให้ API ยืดหยุ่นสำหรับ multi-client — คู่กับ Policy, eager loading และ rate limit เพื่อ production-ready

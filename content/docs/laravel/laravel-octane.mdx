@@ -1,0 +1,137 @@
+---
+title: "Laravel Octane + Swoole — Performance สำหรับ Traffic สูง"
+description: "ติดตั้ง Laravel Octane กับ Swoole/RoadRunner, ข้อควรระวัง memory leak และ deployment บน production"
+topic: laravel
+subtopic: performance
+tags:
+  - octane
+  - swoole
+  - performance
+  - laravel
+  - deployment
+difficulty: advanced
+laravel_version: "11.x"
+verified_at: "2026-06-21"
+author: thaidevdocs-team
+contributors: []
+reading_time: 13
+is_premium: false
+---
+
+## Octane คืออะไร?
+
+**Laravel Octane** รัน application ใน long-lived process (Swoole หรือ RoadRunner) แทน bootstrap Laravel ใหม่ทุก request — ลด latency 30–70% สำหรับ API และ dashboard ที่ traffic สูง
+
+<Callout type="warning">
+Octane ไม่ใช่ silver bullet — ต้องเข้าใจ stateful pitfalls และ memory management
+</Callout>
+
+---
+
+## ติดตั้ง (Swoole)
+
+```bash
+composer require laravel/octane
+php artisan octane:install --server=swoole
+```
+
+```bash
+php artisan octane:start --workers=4 --max-requests=500
+```
+
+Production ใช้ Supervisor หรือ systemd คุม process — ดู [Nginx สำหรับ Laravel](/docs/devops/nginx-laravel) และ [Production Deployment Checklist](/docs/devops/production-deployment-checklist)
+
+---
+
+## สิ่งที่เปลี่ยนเมื่อใช้ Octane
+
+| แบบเดิม (PHP-FPM) | Octane |
+|---|---|
+| Bootstrap ทุก request | Bootstrap ครั้งเดียว |
+| Singleton ใหม่ทุกครั้ง | Singleton ค้างใน memory |
+| `static` property ปลอดภัย | **อันตราย** — leak state ข้าม request |
+
+---
+
+## ข้อควรระวัง: Memory & State
+
+```php
+// ❌ อย่าเก็บ request data ใน static
+class OrderService
+{
+    public static array $cart = []; // leak ระหว่าง users!
+}
+
+// ✅ ใช้ instance หรือ request-scoped binding
+```
+
+```php
+// config/octane.php — flush หลัง max requests
+'max_execution_time' => 30,
+'garbage' => 50,
+```
+
+ใช้ `Octane::tick()` และ `Octane::flush()` สำหรับ cleanup ตาม [เอกสาร Octane อย่างเป็นทางการ](https://laravel.com/docs/11.x/octane)
+
+---
+
+## Database Connections
+
+Connection pool อาจค้าง — ตั้ง listener:
+
+```php
+// app/Providers/AppServiceProvider.php
+use Laravel\Octane\Events\RequestReceived;
+
+Event::listen(RequestReceived::class, function () {
+    DB::reconnect();
+});
+```
+
+---
+
+## Session & Cache
+
+ใช้ **Redis** สำหรับ session/cache — อย่าใช้ file driver บน multi-worker Octane
+
+```ini
+SESSION_DRIVER=redis
+CACHE_STORE=redis
+QUEUE_CONNECTION=redis
+```
+
+ดู: [Redis กับ Laravel](/docs/devops/redis-laravel)
+
+---
+
+## เมื่อไหร่ควรใช้ Octane
+
+**เหมาะ:**
+- API ที่ QPS สูง (LINE webhook, payment callback)
+- Dashboard ที่ query ซ้ำๆ
+- Microservice Laravel แยก service
+
+**ไม่เหมาะ:**
+- App ที่ใช้ `static`/`global` state เยอะ
+- Shared hosting ที่ติดตั้ง Swoole ไม่ได้
+- Traffic ต่ำ — PHP-FPM + OPcache เพียงพอ
+
+---
+
+## Benchmark แบบง่าย
+
+```bash
+# ก่อน Octane
+ab -n 1000 -c 10 https://api.example.com/health
+
+# หลัง Octane (workers=4)
+ab -n 1000 -c 10 http://127.0.0.1:8000/health
+```
+
+วัด p95 latency และ memory ของ worker — ตั้ง `--max-requests` ให้ restart worker เป็นระยะ
+
+---
+
+## สรุป
+
+Octane + Swoole เหมาะกับระบบไทยที่ peak ช่วง flash sale หรือ LINE campaign — แต่ต้อง refactor code ที่พึ่ง request-isolated state และ deploy ด้วย Redis + monitoring

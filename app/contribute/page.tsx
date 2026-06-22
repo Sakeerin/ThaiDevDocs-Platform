@@ -93,6 +93,45 @@ is_premium: false
       </section>
 
       <section className="space-y-3">
+        <h2 className="text-xl font-semibold">Topics ที่เปิดรับ PR (Phase 3)</h2>
+        <p className="text-sm text-fd-muted-foreground">
+          บทความด้านล่างมี seed content แล้ว — ช่วยปรับปรุง แก้ outdated หรือเพิ่มตัวอย่าง Thai context ได้เลย
+        </p>
+        <ul className="grid gap-2 text-sm sm:grid-cols-2">
+          <li>
+            <Link href="/docs/laravel/advanced-testing-pest" className="text-fd-primary hover:underline">
+              Laravel Testing ขั้นสูง
+            </Link>
+          </li>
+          <li>
+            <Link href="/docs/laravel/livewire-alpine" className="text-fd-primary hover:underline">
+              Livewire + Alpine.js
+            </Link>
+          </li>
+          <li>
+            <Link href="/docs/laravel/laravel-octane" className="text-fd-primary hover:underline">
+              Laravel Octane + Swoole
+            </Link>
+          </li>
+          <li>
+            <Link href="/docs/laravel/microservices-laravel" className="text-fd-primary hover:underline">
+              Microservices กับ Laravel
+            </Link>
+          </li>
+          <li>
+            <Link href="/docs/laravel/graphql-laravel" className="text-fd-primary hover:underline">
+              GraphQL ใน Laravel
+            </Link>
+          </li>
+          <li>
+            <Link href="/docs/laravel/performance-optimization-advanced" className="text-fd-primary hover:underline">
+              Performance optimization ขั้นสูง
+            </Link>
+          </li>
+        </ul>
+      </section>
+
+      <section className="space-y-3">
         <h2 className="text-xl font-semibold">Thai Context</h2>
         <p className="text-sm text-fd-muted-foreground">
           ใช้ตัวอย่างที่สะท้อนบริบทไทย เช่น ชื่อลูกค้าไทย สกุลเงินบาท (฿) และ services ที่ developer ไทยใช้จริง (LINE, PromptPay, PDPA)

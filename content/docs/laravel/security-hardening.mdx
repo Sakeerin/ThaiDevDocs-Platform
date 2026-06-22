@@ -1,0 +1,201 @@
+---
+title: "Security Hardening ใน Laravel (Pro)"
+description: "OWASP Top 10, authentication hardening, headers, encryption, audit logging และ PDPA สำหรับ Laravel production"
+topic: laravel
+subtopic: security
+tags:
+  - security
+  - owasp
+  - laravel
+  - pdpa
+  - hardening
+difficulty: advanced
+laravel_version: "11.x"
+verified_at: "2026-06-21"
+author: thaidevdocs-team
+contributors: []
+reading_time: 16
+is_premium: true
+---
+
+## Security Mindset
+
+Security hardening ไม่ใช่ plugin เดียว — เป็น layer: input validation, auth, transport, logging, และ process
+
+<Callout type="warning">
+บทความนี้เป็นแนวทาง — audit ด้วย penetration test ก่อน launch ระบบที่เก็บข้อมูลส่วนบุคคล
+</Callout>
+
+---
+
+## OWASP Top 10 — Laravel Mapping
+
+| ความเสี่ยง | แนวทาง Laravel |
+|---|---|
+| Injection | Eloquent/Query Builder, `$request->validated()` |
+| Broken Auth | Breeze/Fortify, 2FA, session regenerate |
+| Sensitive Data | `APP_DEBUG=false`, encrypt casts, HTTPS |
+| XXE | ไม่ parse XML จาก user โดยไม่จำเป็น |
+| Broken Access | [Policies & Gates](/docs/laravel/policies-gates) |
+| Misconfig | `config:cache`, ปิด directory listing |
+| XSS | Blade `{{ }}` auto-escape, CSP headers |
+| Insecure Deserialization | อย่า `unserialize()` user input |
+| Known Vulnerabilities | `composer audit`, Dependabot |
+| Logging Failures | structured log, ไม่ log password/token |
+
+---
+
+## Authentication Hardening
+
+```php
+// config/auth.php — session
+'lifetime' => 120,
+'expire_on_close' => false,
+
+// LoginController / Fortify
+RateLimiter::for('login', function (Request $request) {
+    return Limit::perMinute(5)->by($request->ip());
+});
+```
+
+```php
+// หลัง login สำเร็จ
+$request->session()->regenerate();
+```
+
+- [ ] Password policy (min 12 chars, breached check)
+- [ ] 2FA สำหรับ admin
+- [ ] Lock account หลัง failed attempts
+- [ ] Sanctum token expiration + ability scopes
+
+---
+
+## HTTP Security Headers
+
+```php
+// bootstrap/app.php หรือ middleware
+return $response->withHeaders([
+    'X-Frame-Options' => 'SAMEORIGIN',
+    'X-Content-Type-Options' => 'nosniff',
+    'Referrer-Policy' => 'strict-origin-when-cross-origin',
+    'Permissions-Policy' => 'geolocation=(), microphone=()',
+    'Strict-Transport-Security' => 'max-age=31536000; includeSubDomains',
+]);
+```
+
+Content-Security-Policy เริ่มจาก report-only ก่อน enforce:
+
+```php
+'Content-Security-Policy-Report-Only' => "default-src 'self'; script-src 'self' 'nonce-{$nonce}'",
+```
+
+---
+
+## Input Validation & Mass Assignment
+
+```php
+// ❌
+User::create($request->all());
+
+// ✅
+User::create($request->validated());
+
+// Model
+protected $fillable = ['name', 'email'];
+protected $guarded = ['id', 'is_admin'];
+```
+
+File upload:
+
+```php
+$request->validate([
+    'avatar' => 'required|image|mimes:jpg,png|max:2048',
+]);
+$path = $request->file('avatar')->store('avatars', 's3');
+```
+
+---
+
+## Encryption & Secrets
+
+```php
+// Model
+protected $casts = [
+    'national_id' => 'encrypted',
+    'bank_account' => 'encrypted',
+];
+```
+
+- [ ] `APP_KEY` rotate มี procedure (re-encrypt data)
+- [ ] API keys ใน `.env` / AWS Secrets Manager
+- [ ] ไม่ log `$request->all()` ใน production
+
+---
+
+## API Security
+
+```php
+Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
+    Route::apiResource('orders', OrderController::class);
+});
+```
+
+- Token ability: `['orders:read']` แยก scope
+- Webhook signature verify (Omise, LINE):
+
+```php
+if (! hash_equals($expected, $request->header('X-Omise-Signature'))) {
+    abort(403);
+}
+```
+
+---
+
+## Audit Logging (PDPA)
+
+```php
+// app/Listeners/LogPersonalDataAccess.php
+AuditLog::create([
+    'user_id' => auth()->id(),
+    'action' => 'view_customer',
+    'target_id' => $customer->id,
+    'ip' => request()->ip(),
+    'at' => now(),
+]);
+```
+
+- Log การเข้าถึง PII (ชื่อ, เบอร์, บัตรประชาชน)
+- Retention ตามนโยบาย PDPA
+- Right to erasure — soft delete + anonymize
+
+ดู: [PDPA สำหรับ Developer](/docs/thai-context/pdpa)
+
+---
+
+## Dependency & Server
+
+```bash
+composer audit
+npm audit
+```
+
+- [ ] PHP และ OS security patches อัตโนมัติ (unattended-upgrades)
+- [ ] ปิด port ที่ไม่ใช้
+- [ ] Separate DB user per app
+- [ ] WAF (Cloudflare) สำหรับ public API
+
+---
+
+## Incident Response
+
+1. **Detect** — alert จาก Sentry/monitoring
+2. **Contain** — revoke tokens, maintenance mode
+3. **Eradicate** — patch, rotate secrets
+4. **Recover** — restore from backup
+5. **Notify** — PDPA breach notification ภายใน 72 ชม. (ถ้าเข้าเกณฑ์)
+
+---
+
+## สรุป
+
+Security hardening = validate ทุก input, authorize ทุก action, encrypt sensitive data, monitor และมี incident plan — โดยเฉพาะระบบที่เก็บข้อมูลลูกค้าไทย

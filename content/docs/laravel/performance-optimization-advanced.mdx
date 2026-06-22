@@ -1,0 +1,182 @@
+---
+title: "Performance Optimization ขั้นสูงใน Laravel"
+description: "Profiling, query optimization, caching layers, queue offload และ checklist สำหรับ production ที่ traffic สูง"
+topic: laravel
+subtopic: performance
+tags:
+  - performance
+  - cache
+  - optimization
+  - laravel
+  - database
+difficulty: advanced
+laravel_version: "11.x"
+verified_at: "2026-06-21"
+author: thaidevdocs-team
+contributors: []
+reading_time: 15
+is_premium: false
+---
+
+## วัดก่อน optimize
+
+อย่าเดา bottleneck — ใช้เครื่องมือวัดจริง:
+
+```bash
+composer require laravel/telescope --dev
+php artisan telescope:install
+```
+
+Production ใช้ **Laravel Pulse**, **Blackfire**, หรือ APM (New Relic, Datadog)
+
+<Callout type="warning">
+เปิด Telescope บน production โดยไม่จำกัด IP — อันตรายด้าน security
+</Callout>
+
+---
+
+## Database: เกิน N+1
+
+N+1 แก้ด้วย eager loading — แต่ advanced case ต้องดู query plan:
+
+```php
+// ❌ Lazy load ใน loop
+foreach ($orders as $order) {
+    echo $order->user->name;
+}
+
+// ✅ Eager load
+Order::with('user:id,name')->latest()->paginate(20);
+```
+
+```php
+// Subquery แทน load ทั้ง relation
+Product::addSelect([
+    'orders_count' => OrderItem::selectRaw('count(*)')
+        ->whereColumn('product_id', 'products.id'),
+])->paginate(20);
+```
+
+ดู: [Eager Loading](/docs/laravel/eager-loading), [Query Builder vs Eloquent](/docs/laravel/query-builder-vs-eloquent)
+
+---
+
+## Index ที่มักลืม
+
+```php
+Schema::table('orders', function (Blueprint $table) {
+    $table->index(['shop_id', 'status', 'created_at']);
+    $table->index('user_id');
+});
+```
+
+- Composite index ตาม WHERE + ORDER BY
+- อย่า index ทุก column — ช้า write
+- ใช้ `EXPLAIN` บน MySQL ก่อน deploy migration
+
+---
+
+## Caching Layers
+
+### 1. Config & Route (Deploy)
+
+```bash
+php artisan config:cache
+php artisan route:cache
+php artisan view:cache
+php artisan event:cache
+```
+
+### 2. Application Cache (Redis)
+
+```php
+public function getFeaturedProducts(string $province): Collection
+{
+    return Cache::tags(['products', "province:{$province}"])
+        ->remember("featured:{$province}", 3600, fn () =>
+            Product::featured()->forProvince($province)->limit(12)->get()
+        );
+}
+
+// เมื่ออัปเดตสินค้า
+Cache::tags(['products'])->flush();
+```
+
+### 3. HTTP Cache
+
+```php
+return response()->json($data)->header('Cache-Control', 'public, max-age=300');
+```
+
+CDN (Cloudflare) cache GET ที่ไม่มี auth
+
+---
+
+## Queue Heavy Work
+
+```php
+// ❌ Sync ใน request
+Mail::to($user)->send(new InvoiceMail($order));
+GeneratePdfReport::dispatch($order)->onQueue('reports');
+
+// ✅ Queue
+SendLineNotification::dispatch($order)->afterCommit();
+```
+
+ดู: [Queue & Jobs](/docs/laravel/queue-jobs)
+
+---
+
+## Chunk & Cursor สำหรับ Batch
+
+```php
+// ❌ Memory explode
+User::all()->each(fn ($u) => $u->notify(...));
+
+// ✅ Chunk
+User::where('marketing_opt_in', true)->chunkById(500, function ($users) {
+    foreach ($users as $user) {
+        NotifyPromotion::dispatch($user);
+    }
+});
+```
+
+---
+
+## Octane & OPcache
+
+- **PHP-FPM + OPcache** — default ที่ดีสำหรับส่วนใหญ่
+- **Octane** — เมื่อ latency p95 ยังสูงหลัง cache/DB tune
+
+ดู: [Laravel Octane + Swoole](/docs/laravel/laravel-octane)
+
+---
+
+## Frontend & Assets
+
+```bash
+npm run build
+```
+
+- Vite code splitting
+- Lazy load Livewire/Alpine components
+- `next/image` ฝั่ง docs — ฝั่ง Laravel ใช้ responsive images + WebP
+
+---
+
+## Checklist Production
+
+| รายการ | สถานะ |
+|---|---|
+| `APP_DEBUG=false` | ☐ |
+| Redis cache + session | ☐ |
+| Queue worker (Supervisor) | ☐ |
+| DB index ตรวจแล้ว | ☐ |
+| Telescope/Pulse จำกัด env | ☐ |
+| CDN สำหรับ static | ☐ |
+
+---
+
+## สรุป
+
+Performance ขั้นสูง = วัด → แก้ query/index → cache ชั้นที่เหมาะ → offload ด้วย queue → พิจารณา Octane เมื่อจำเป็น

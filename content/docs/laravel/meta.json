@@ -12,6 +12,14 @@
     "policies-gates",
     "api-resources",
     "testing-pest",
-    "building-saas-laravel"
+    "advanced-testing-pest",
+    "livewire-alpine",
+    "laravel-octane",
+    "microservices-laravel",
+    "graphql-laravel",
+    "performance-optimization-advanced",
+    "building-saas-laravel",
+    "security-hardening",
+    "database-design-thai-business"
   ]
 }

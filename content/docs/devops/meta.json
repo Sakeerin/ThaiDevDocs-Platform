@@ -11,6 +11,7 @@
     "mysql-optimization",
     "redis-laravel",
     "env-management",
-    "laravel-monitoring"
+    "laravel-monitoring",
+    "production-deployment-checklist"
   ]
 }
