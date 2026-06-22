@@ -37,7 +37,21 @@ function SponsorCard({ sponsor, compact }: { sponsor: Sponsor; compact?: boolean
         <ExternalLink className="size-3 text-fd-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" aria-hidden />
       </div>
       <p className={cn('mt-2 font-semibold text-foreground', compact ? 'text-sm' : 'text-base')}>
-        {sponsor.name}
+        {sponsor.logoUrl ? (
+          <span className="flex items-center gap-2">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={sponsor.logoUrl}
+              alt=""
+              width={compact ? 20 : 24}
+              height={compact ? 20 : 24}
+              className="rounded-sm object-contain"
+            />
+            {sponsor.name}
+          </span>
+        ) : (
+          sponsor.name
+        )}
       </p>
       {!compact ? (
         <p className="mt-1 text-xs leading-relaxed text-fd-muted-foreground">{sponsor.tagline}</p>

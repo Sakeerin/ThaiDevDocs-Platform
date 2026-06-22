@@ -88,10 +88,13 @@ Copy additional env vars from `.env.local.example`:
 
 ## Sponsors
 
-- Edit `data/sponsors.json` to add sidebar sponsors
+- Sponsor onboarding: `/sponsor` (packages, inquiry form, onboarding steps)
+- Maintainer runbook: [docs/SPONSOR-ONBOARDING.md](docs/SPONSOR-ONBOARDING.md)
+- Edit `data/sponsors.json` to add live sidebar sponsors (see `data/sponsors.example.json`)
+- List inquiries: `npm run sponsor:inquiries`
 - Sidebar shows in docs TOC column (desktop) and TOC popover (mobile)
-- Sponsor packages and contact at `/sponsor`
 - Set `NEXT_PUBLIC_SPONSORS_ENABLED=false` to hide sponsor slots
+- `SPONSOR_INQUIRY_NOTIFY_EMAIL` — where form submissions are sent (requires Resend)
 
 ## Vercel Staging Setup
 

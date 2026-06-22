@@ -1,0 +1,11 @@
+[
+  {
+    "id": "example-dev-tools",
+    "name": "Example Dev Tools",
+    "tagline": "Deploy Laravel เร็วขึ้น 3x สำหรับทีมไทย",
+    "url": "https://example.com",
+    "tier": "gold",
+    "logoUrl": "/images/og/default.png",
+    "active": false
+  }
+]

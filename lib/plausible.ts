@@ -12,7 +12,8 @@ export type PlausibleEvent =
   | 'search_query'
   | 'ai_question'
   | 'helpful_vote'
-  | 'sponsor_click';
+  | 'sponsor_click'
+  | 'sponsor_inquiry_submit';
 
 export function trackPlausibleEvent(
   event: PlausibleEvent,
